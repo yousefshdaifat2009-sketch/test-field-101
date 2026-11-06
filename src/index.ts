@@ -66,11 +66,12 @@ export default {
                 return;
               }
 
+              // Call Groq API using the newest supported model
               const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  model: 'llama3-70b-8192', // Upgraded to the smarter model
+                  model: 'llama-3.3-70b-versatile',
                   messages: [
                     { role: 'system', content: 'You are a narrator for the anime Call of the Night. Be brief, melancholic, and mysterious.' },
                     { role: 'user', content: prompt }
