@@ -66,12 +66,12 @@ export default {
                 return;
               }
 
-              // Call Groq API using the newest supported model
+              // Using the current available free model
               const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  model: 'llama-3.3-70b-versatile',
+                  model: 'openai/gpt-oss-20b',
                   messages: [
                     { role: 'system', content: 'You are a narrator for the anime Call of the Night. Be brief, melancholic, and mysterious.' },
                     { role: 'user', content: prompt }
@@ -95,6 +95,7 @@ export default {
               }
               
               if (!aiReply || aiReply.trim() === "") {
+                // This will tell us exactly what Groq sent if it's empty
                 throw new Error(`Groq returned an empty message. Full response: ${JSON.stringify(groqData)}`);
               }
 
