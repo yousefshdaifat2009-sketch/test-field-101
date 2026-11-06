@@ -70,7 +70,7 @@ export default {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  model: 'openai/gpt-oss-20b', // Updated to the newest fast model
+                  model: 'llama3-70b-8192', // Upgraded to the smarter model
                   messages: [
                     { role: 'system', content: 'You are a narrator for the anime Call of the Night. Be brief, melancholic, and mysterious.' },
                     { role: 'user', content: prompt }
@@ -85,7 +85,17 @@ export default {
               }
 
               const groqData: any = await groqRes.json();
-              const aiReply = groqData.choices[0].message.content;
+              
+              let aiReply = "";
+              try {
+                aiReply = groqData.choices[0].message.content;
+              } catch (e) {
+                throw new Error(`Failed to parse Groq response: ${JSON.stringify(groqData)}`);
+              }
+              
+              if (!aiReply || aiReply.trim() === "") {
+                throw new Error(`Groq returned an empty message. Full response: ${JSON.stringify(groqData)}`);
+              }
 
               await env.DB.prepare(`INSERT INTO ai_usage (date, count) VALUES (?, 1) ON CONFLICT(date) DO UPDATE SET count = count + 1`).bind(today).run();
 
@@ -95,7 +105,6 @@ export default {
               });
 
             } catch (error: any) {
-              // This will send the error directly to Discord so we can see it!
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: `**Error:** ${error.message}` })
