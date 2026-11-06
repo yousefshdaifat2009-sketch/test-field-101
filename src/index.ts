@@ -70,7 +70,7 @@ export default {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  model: 'llama-3.1-8b-instant', // Updated to the newest fast model
+                  model: 'openai/gpt-oss-20b', // Updated to the newest fast model
                   messages: [
                     { role: 'system', content: 'You are a narrator for the anime Call of the Night. Be brief, melancholic, and mysterious.' },
                     { role: 'user', content: prompt }
