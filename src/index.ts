@@ -10,6 +10,23 @@ export interface Env {
   DB: D1Database;
 }
 
+// --- HARDCODED MINI-GAME DATA (Guarantees it never breaks) ---
+const KARAOKE_SONGS = [
+  { lyric: "The moon is high, the night is ____", correct: "young", wrong1: "cold", wrong2: "over" },
+  { lyric: "I can't sleep, I'm falling for the ____", correct: "dark", wrong1: "sun", wrong2: "clock" },
+  { lyric: "Your fangs are sharp, but your heart is ____", correct: "soft", wrong1: "stone", wrong2: "iron" },
+  { lyric: "Walking alone under the neon ____", correct: "lights", wrong1: "stars", wrong2: "rain" },
+  { lyric: "Don't look back, the shadow is ____", correct: "close", wrong1: "loud", wrong2: "bright" }
+];
+
+const RIDDLES = [
+  { riddle: "I have cities, but no houses. I have mountains, but no trees. I have water, but no fish. What am I?", correct: "A map", wrong1: "A dream", wrong2: "A painting" },
+  { riddle: "The more of me you take, the more you leave behind. What am I?", correct: "Footsteps", wrong1: "Memories", wrong2: "Breath" },
+  { riddle: "I speak without a mouth and hear without ears. I have no body, but I come alive with wind. What am I?", correct: "An echo", wrong1: "A ghost", wrong2: "A thought" },
+  { riddle: "What has a neck but no head?", correct: "A bottle", wrong1: "A shirt", wrong2: "A guitar" },
+  { riddle: "What gets wetter the more it dries?", correct: "A towel", wrong1: "A sponge", wrong2: "A shadow" }
+];
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -362,31 +379,30 @@ export default {
         if (cid === 'game_td_truth' || cid === 'game_td_dare') {
           const isTruth = cid === 'game_td_truth';
           ctx.waitUntil((async () => {
+            let prompt = isTruth ? "What is the biggest lie you've told to hide your nighttime activities?" : "Change your Discord nickname to 'Vampire Bait' for one hour.";
             try {
               const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                   model: 'openai/gpt-oss-20b', 
-                  messages: [{ role: 'system', content: isTruth ? 'You are Nazuna Nanakusa. Ask the player one deep, melancholic, or slightly embarrassing "Truth" question related to the night or their character.' : 'You are Nazuna Nanakusa. Give the player one playful, harmless "Dare" they have to do in the Discord server (e.g., change nickname, send an emoji, type a phrase).' }], 
+                  messages: [{ role: 'system', content: isTruth ? 'You are Nazuna Nanakusa. Ask the player one deep, melancholic, or slightly embarrassing "Truth" question related to the night or their character.' : 'You are Nazuna Nanakusa. Give the player one playful, harmless "Dare" they have to do in the Discord server.' }], 
                   max_tokens: 100 
                 })
               });
               const aiData: any = await aiRes.json();
-              const prompt = aiData.choices[0].message.content;
+              if (aiData.choices && aiData.choices[0].message.content) prompt = aiData.choices[0].message.content;
+            } catch (e) {}
 
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  content: `🎲 **Truth or Dare**\nNazuna leans in close.\n\n> *"${prompt}"*`,
-                  components: [{ type: 1, components: [
-                    { type: 2, style: 3, label: "I Accept", custom_id: "game_td_accept" },
-                    { type: 2, style: 4, label: "Quit", custom_id: "game_quit" }
-                  ]}]
-                })
-              });
-            } catch (e) {
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "The night goes quiet." }) });
-            }
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                content: `🎲 **Truth or Dare**\nNazuna leans in close.\n\n> *"${prompt}"*`,
+                components: [{ type: 1, components: [
+                  { type: 2, style: 3, label: "I Accept", custom_id: "game_td_accept" },
+                  { type: 2, style: 4, label: "Quit", custom_id: "game_quit" }
+                ]}]
+              })
+            });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -396,13 +412,9 @@ export default {
             await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
             const levelResult = await processLevelUp(env, userId);
             let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
-            
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                content: `Nazuna laughs. *"You actually did it. Brave."*\n\n**(+50 XP)**${extraMsg}`,
-                components: []
-              })
+              body: JSON.stringify({ content: `Nazuna laughs. *"You actually did it. Brave."*\n\n**(+50 XP)**${extraMsg}`, components: [] })
             });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
@@ -414,65 +426,58 @@ export default {
             data: { 
               custom_id: 'game_stargaze_modal', 
               title: 'Stargazing', 
-              components: [
-                { type: 1, components: [{ type: 4, custom_id: 'constellation', label: 'What do you see in the stars?', style: 2, min_length: 3, max_length: 100, required: true }] }
-              ] 
+              components: [{ type: 1, components: [{ type: 4, custom_id: 'constellation', label: 'What do you see in the stars?', style: 2, min_length: 3, max_length: 100, required: true }] }] 
             } 
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid === 'game_karaoke_start') {
-          ctx.waitUntil((async () => {
-            try {
-              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  model: 'openai/gpt-oss-20b', 
-                  messages: [{ role: 'system', content: `You are Seri from Call of the Night, hosting Karaoke. Output a JSON object exactly like this: {"lyric": "The moon is high, the night is ____", "correct": "young", "wrong1": "cold", "wrong2": "over"}. Make the lyric melancholic or romantic.` }], 
-                  max_tokens: 150 
-                })
-              });
-              const aiData: any = await aiRes.json();
-              let rawText = aiData.choices[0].message.content.trim();
-              if (rawText.startsWith('\`\`\`json')) rawText = rawText.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
-              const karaokeData = JSON.parse(rawText);
+          const song = KARAOKE_SONGS[Math.floor(Math.random() * KARAOKE_SONGS.length)];
+          const options = [
+            { label: song.correct, id: "correct" },
+            { label: song.wrong1, id: "wrong" },
+            { label: song.wrong2, id: "wrong" }
+          ].sort(() => Math.random() - 0.5);
 
-              // Shuffle options
-              const options = [
-                { label: karaokeData.correct, id: "correct" },
-                { label: karaokeData.wrong1, id: "wrong" },
-                { label: karaokeData.wrong2, id: "wrong" }
-              ].sort(() => Math.random() - 0.5);
-
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  content: `🎤 **Karaoke Night**\nSeri hands you the mic. *"Don't leave me hanging!"*\n\n*"${karaokeData.lyric}"*`,
-                  components: [{ type: 1, components: options.map(o => ({ type: 2, style: 1, label: o.label, custom_id: `game_karaoke_ans_${o.id}` })) }]
-                })
-              });
-            } catch (e) {
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "The music stops." }) });
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.UPDATE_MESSAGE,
+            data: {
+              content: `🎤 **Karaoke Night**\nSeri hands you the mic. *"Don't leave me hanging!"*\n\n*"${song.lyric}"*`,
+              components: [{ type: 1, components: options.map(o => ({ type: 2, style: 1, label: o.label, custom_id: `game_karaoke_ans_${o.id}` })) }]
             }
-          })());
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+          }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid.startsWith('game_karaoke_ans_')) {
           const isCorrect = cid.endsWith('correct');
           ctx.waitUntil((async () => {
+            let reaction = "";
+            try {
+              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  model: 'openai/gpt-oss-20b', 
+                  messages: [{ role: 'system', content: `You are Seri from Call of the Night. The player just ${isCorrect ? 'sang perfectly' : 'sang terribly'}. Write one short reaction sentence.` }], 
+                  max_tokens: 50 
+                })
+              });
+              const aiData: any = await aiRes.json();
+              if (aiData.choices && aiData.choices[0].message.content) reaction = aiData.choices[0].message.content;
+            } catch (e) {}
+            if (!reaction) reaction = isCorrect ? "Seri cheers! \"Perfect pitch!\"" : "Seri winces. \"Oof. That was rough.\"";
+
             if (isCorrect) {
               await env.DB.prepare(`UPDATE players SET xp = xp + 100 WHERE id = ?`).bind(userId).run();
               const levelResult = await processLevelUp(env, userId);
               let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: `🎤 **Karaoke Night**\nSeri cheers! *"Perfect pitch!"*\n\n**(+100 XP)**${extraMsg}`, components: [] })
+                body: JSON.stringify({ content: `🎤 **Karaoke Night**\n${reaction}\n\n**(+100 XP)**${extraMsg}`, components: [] })
               });
             } else {
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: `🎤 **Karaoke Night**\nSeri winces. *"Oof. That was rough."*`, components: [] })
+                body: JSON.stringify({ content: `🎤 **Karaoke Night**\n${reaction}`, components: [] })
               });
             }
           })());
@@ -480,56 +485,52 @@ export default {
         }
 
         if (cid === 'game_riddle_start') {
-          ctx.waitUntil((async () => {
-            try {
-              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  model: 'openai/gpt-oss-20b', 
-                  messages: [{ role: 'system', content: `You are Anko Uguisu. Give a short detective riddle. Output JSON exactly like this: {"riddle": "I have cities...", "correct": "A map", "wrong1": "A book", "wrong2": "A dream"}.` }], 
-                  max_tokens: 150 
-                })
-              });
-              const aiData: any = await aiRes.json();
-              let rawText = aiData.choices[0].message.content.trim();
-              if (rawText.startsWith('\`\`\`json')) rawText = rawText.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
-              const riddleData = JSON.parse(rawText);
+          const riddle = RIDDLES[Math.floor(Math.random() * RIDDLES.length)];
+          const options = [
+            { label: riddle.correct, id: "correct" },
+            { label: riddle.wrong1, id: "wrong" },
+            { label: riddle.wrong2, id: "wrong" }
+          ].sort(() => Math.random() - 0.5);
 
-              const options = [
-                { label: riddleData.correct, id: "correct" },
-                { label: riddleData.wrong1, id: "wrong" },
-                { label: riddleData.wrong2, id: "wrong" }
-              ].sort(() => Math.random() - 0.5);
-
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  content: `🕵️ **Anko's Riddle**\nAnko blows smoke in your face.\n\n*"${riddleData.riddle}"*`,
-                  components: [{ type: 1, components: options.map(o => ({ type: 2, style: 1, label: o.label, custom_id: `game_riddle_ans_${o.id}` })) }]
-                })
-              });
-            } catch (e) {
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "Anko ignores you." }) });
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.UPDATE_MESSAGE,
+            data: {
+              content: `🕵️ **Anko's Riddle**\nAnko blows smoke in your face.\n\n*"${riddle.riddle}"*`,
+              components: [{ type: 1, components: options.map(o => ({ type: 2, style: 1, label: o.label, custom_id: `game_riddle_ans_${o.id}` })) }]
             }
-          })());
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+          }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid.startsWith('game_riddle_ans_')) {
           const isCorrect = cid.endsWith('correct');
           ctx.waitUntil((async () => {
+            let reaction = "";
+            try {
+              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  model: 'openai/gpt-oss-20b', 
+                  messages: [{ role: 'system', content: `You are Anko Uguisu. The player just answered a riddle ${isCorrect ? 'correctly' : 'incorrectly'}. Write one short, cynical reaction sentence.` }], 
+                  max_tokens: 50 
+                })
+              });
+              const aiData: any = await aiRes.json();
+              if (aiData.choices && aiData.choices[0].message.content) reaction = aiData.choices[0].message.content;
+            } catch (e) {}
+            if (!reaction) reaction = isCorrect ? "Anko raises an eyebrow. \"Not bad, kid.\"" : "Anko sighs. \"Pathetic.\"";
+
             if (isCorrect) {
               await env.DB.prepare(`UPDATE players SET xp = xp + 150 WHERE id = ?`).bind(userId).run();
               const levelResult = await processLevelUp(env, userId);
               let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: `🕵️ **Anko's Riddle**\nAnko raises an eyebrow. *"Not bad, kid."*\n\n**(+150 XP)**${extraMsg}`, components: [] })
+                body: JSON.stringify({ content: `🕵️ **Anko's Riddle**\n${reaction}\n\n**(+150 XP)**${extraMsg}`, components: [] })
               });
             } else {
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: `🕵️ **Anko's Riddle**\nAnko sighs. *"Pathetic."*`, components: [] })
+                body: JSON.stringify({ content: `🕵️ **Anko's Riddle**\n${reaction}`, components: [] })
               });
             }
           })());
@@ -1024,6 +1025,7 @@ export default {
         if (interaction.data.custom_id === 'game_stargaze_modal') {
           const constellationName = interaction.data.components[0].components[0].value;
           ctx.waitUntil((async () => {
+            let legend = "It reminds you of a forgotten promise.";
             try {
               const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
@@ -1034,22 +1036,20 @@ export default {
                 })
               });
               const aiData: any = await aiRes.json();
-              const legend = aiData.choices[0].message.content;
+              if (aiData.choices && aiData.choices[0].message.content) legend = aiData.choices[0].message.content;
+            } catch (e) {}
 
-              await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
-              const levelResult = await processLevelUp(env, userId);
-              let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
+            await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
+            const levelResult = await processLevelUp(env, userId);
+            let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
 
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  content: `✨ **Stargazing**\nYou point at the sky. *"That one is called ${constellationName}."*\n\n> ${legend}\n\n**(+50 XP)**${extraMsg}`,
-                  components: []
-                })
-              });
-            } catch (e) {
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "The stars are quiet tonight." }) });
-            }
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                content: `✨ **Stargazing**\nYou point at the sky. *"That one is called ${constellationName}."*\n\n> ${legend}\n\n**(+50 XP)**${extraMsg}`,
+                components: []
+              })
+            });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -1066,113 +1066,4 @@ export default {
               const playerName = player ? player.name : "a stranger";
               let npcName = ""; let prompt = ""; let npcId = ""; let avatarUrl = "https://i.imgur.com/your_nazuna_image.png";
               if (modalId === 'modal_nazuna') { npcId = "nazuna"; npcName = "Nazuna Nanakusa"; prompt = `You are Nazuna Nanakusa from Call of the Night. You are a vampire. You are teasing, slightly sarcastic, but caring. You are talking to ${playerName}. Never break character. Keep responses to 1-3 sentences.`; }
-              else if (modalId === 'modal_kou') { npcId = "kou"; npcName = "Kou Yamori"; prompt = `You are Kou Yamori from Call of the Night. You are a human boy who can't sleep and wants to be a vampire. You are blunt, observant, and a bit awkward. You are talking to ${playerName}. Keep responses to 1-3 sentences.`; }
-              else if (modalId === 'modal_akira') { npcId = "akira"; npcName = "Akira Asai"; prompt = `You are Akira Asai from Call of the Night. You are Kou's human friend. You are energetic, caring, and worried about Kou. You are talking to ${playerName}. Keep responses to 1-3 sentences.`; }
-              else if (modalId === 'modal_anko') { npcId = "anko"; npcName = "Anko Uguisu"; prompt = `You are Anko Uguisu from Call of the Night. You are a cynical vampire-hunting detective. You smoke, wear a trench coat, and are deeply traumatized. You are talking to ${playerName}. Keep responses to 1-3 sentences.`; }
-              await env.DB.prepare(`INSERT OR IGNORE INTO player_npcs_met (player_id, npc_id) VALUES (?, ?)`).bind(userId, npcId).run();
-              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: prompt }, { role: 'user', content: userMessage }], max_tokens: 1000 }) });
-              if (!aiRes.ok) throw new Error(`Groq API Error: ${await aiRes.text()}`);
-              const aiData: any = await aiRes.json();
-              const reply = aiData.choices[0].message.content;
-              await env.DB.prepare(`INSERT INTO ai_usage (date, count) VALUES (?, 1) ON CONFLICT(date) DO UPDATE SET count = count + 1`).bind(today).run();
-              const threadInfoRes = await fetch(`https://discord.com/api/v10/channels/${threadId}`, { headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` } });
-              const threadInfo: any = await threadInfoRes.json();
-              const parentChannelId = threadInfo.parent_id;
-              let webhookId = ""; let webhookToken = "";
-              const existingHooksRes = await fetch(`https://discord.com/api/v10/channels/${parentChannelId}/webhooks`, { headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` } });
-              if (existingHooksRes.ok) { const existingHooks: any = await existingHooksRes.json(); const npcHook = existingHooks.find((h: any) => h.name === npcName); if (npcHook) { webhookId = npcHook.id; webhookToken = npcHook.token; } }
-              if (!webhookId) { const webhookRes = await fetch(`https://discord.com/api/v10/channels/${parentChannelId}/webhooks`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: npcName }) }); const webhookData: any = await webhookRes.json(); webhookId = webhookData.id; webhookToken = webhookData.token; }
-              await fetch(`https://discord.com/api/v10/webhooks/${webhookId}/${webhookToken}?thread_id=${threadId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: reply, username: npcName, avatar_url: avatarUrl }) });
-              if (player) {
-                await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
-                const levelResult = await processLevelUp(env, userId);
-                if (levelResult) {
-                  await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${levelResult.level}.` }) });
-                  if (levelResult.level === 5 && player.track !== 'Vampire Offspring') {
-                    const metCount: any = await env.DB.prepare('SELECT COUNT(*) as count FROM player_npcs_met WHERE player_id = ?').bind(userId).first();
-                    const clueCount: any = await env.DB.prepare('SELECT COUNT(*) as count FROM quests_progress WHERE player_id = ?').bind(userId).first();
-                    const infClueCount: any = await env.DB.prepare('SELECT COUNT(*) as count FROM infinite_quests WHERE player_id = ?').bind(userId).first();
-                    const totalClues = (clueCount?.count || 0) + (infClueCount?.count || 0);
-                    if (metCount.count >= 3 && totalClues >= 1) { await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🌙 **The night notices you.**\n\nYou have reached Level 5. It is time to choose your path. Will you become an Offspring?`, components: [{ type: 1, components: [{ type: 2, style: 3, label: "Choose Nazuna as Sire", custom_id: "sire_nazuna" }, { type: 2, style: 3, label: "Choose a Wildcard Sire", custom_id: "sire_wildcard" }] }] }) }); }
-                    else { await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🌙 **The night notices you, but not yet.**\n\nYou reached Level 5, but to become an Offspring you must meet at least **3 NPCs** and find at least **1 Clue** in the city.` }) }); }
-                  }
-                }
-                const bond = await env.DB.prepare('SELECT points FROM npc_bonds WHERE player_id = ? AND npc_id = ?').bind(userId, npcId).first();
-                if (bond) await env.DB.prepare('UPDATE npc_bonds SET points = points + 1 WHERE player_id = ? AND npc_id = ?').bind(userId, npcId).run();
-                else await env.DB.prepare('INSERT INTO npc_bonds (player_id, npc_id, points) VALUES (?, ?, 1)').bind(userId, npcId).run();
-              }
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'DELETE' });
-            } catch (error: any) { await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**Error:** ${error.message}` }) }); }
-          })());
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE }), { headers: { 'Content-Type': 'application/json' } });
-        }
-      }
-    }
-    return new Response('Not found', { status: 404 });
-  },
-
-  // --- CRON TRIGGERS (DAY/NIGHT CYCLE) ---
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    const utcHour = new Date().getUTCHours();
-    const tokyoHour = (utcHour + 9) % 24;
-    let message = "";
-    if (tokyoHour === 18) message = "🌙 **The night begins.**\nThe city exhales. Somewhere, a door opens.";
-    else if (tokyoHour === 6) message = "☀️ **The sun rises.**\nThe night lets go — for now.";
-    if (message) {
-      await fetch(`https://discord.com/api/v10/channels/${env.GAME_CHANNEL_ID}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: message }) });
-    }
-  }
-};
-
-// --- HELPER FUNCTIONS ---
-async function processLevelUp(env: Env, userId: string) {
-  const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
-  if (!player) return null;
-  let lvl = Number(player.level) || 1;
-  let xp = Number(player.xp) || 0;
-  let leveledUp = false;
-  while (xp >= (lvl * 100)) { xp -= (lvl * 100); lvl++; leveledUp = true; }
-  if (leveledUp) {
-    await env.DB.prepare('UPDATE players SET level = ?, xp = ? WHERE id = ?').bind(lvl, xp, userId).run();
-    return { level: lvl, xp: xp };
-  }
-  return null;
-}
-
-function parseStat(statsStr: string | undefined, statName: string): number {
-  if (!statsStr) return 0;
-  const regex = new RegExp(statName + "\\s+(\\d+)", "i");
-  const match = statsStr.match(regex);
-  return match ? parseInt(match[1], 10) : 0;
-}
-
-function createCombatEmbed(p1Id: string, p1Hp: number, p1MaxHp: number, p2Name: string, p2Hp: number, p2MaxHp: number, description: string, round: number, isPvp: boolean = false) {
-  const p1BarLen = 10;
-  const p1Prog = Math.max(0, Math.ceil((p1Hp / p1MaxHp) * p1BarLen));
-  const p1Bar = "🟩".repeat(p1Prog) + "⬛".repeat(p1BarLen - p1Prog);
-
-  const p2BarLen = 10;
-  const p2Prog = Math.max(0, Math.ceil((p2Hp / p2MaxHp) * p2BarLen));
-  const p2Bar = (isPvp ? "🟪" : "🟥").repeat(p2Prog) + "⬛".repeat(p2BarLen - p2Prog);
-
-  return {
-    title: isPvp ? `⚔️ PVP DUEL - Round ${round}` : `⚔️ BATTLE - Round ${round}`,
-    color: isPvp ? 0x8A2BE2 : 0x8B0000,
-    description: description,
-    fields: [
-      {
-        name: `🧑 <@${p1Id}>`,
-        value: `${p1Bar}\n**HP:** ${Math.max(0, p1Hp)} / ${p1MaxHp}`,
-        inline: true
-      },
-      {
-        name: isPvp ? `🧑 ${p2Name}` : `🩸 ${p2Name}`,
-        value: `${p2Bar}\n**HP:** ${Math.max(0, p2Hp)} / ${p2MaxHp}`,
-        inline: true
-      }
-    ],
-    footer: {
-      text: "Call of the Night RPG"
-    }
-  };
-}
+              else if (modalId === 'modal_kou') { npcId = "kou"; npcName = "Kou Yamori"; prompt = `You are Kou Yamori from Call of the Night. You are a human boy who can't sleep and wants to be a vampire. You are blunt, observant, and a bit awkward. You are talking to ${playerName}. Keep responses to 1
