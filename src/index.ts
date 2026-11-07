@@ -6,6 +6,7 @@ export interface Env {
   DISCORD_BOT_TOKEN: string;
   GROQ_API_KEY: string;
   OWNER_DISCORD_ID: string;
+  GAME_CHANNEL_ID: string;
   DB: D1Database;
 }
 
@@ -55,7 +56,6 @@ export default {
               let content = "You haven't created a character yet. Use `/begin` to start.";
               
               if (player) {
-                // Force numbers just in case D1 returns strings
                 const lvl = Number(player.level) || 1;
                 const xp = Number(player.xp) || 0;
                 const xpNeeded = lvl * 100; 
@@ -381,4 +381,27 @@ export default {
     }
     return new Response('Not found', { status: 404 });
   },
+
+  // --- CRON TRIGGERS (DAY/NIGHT CYCLE) ---
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const utcHour = new Date().getUTCHours();
+    const tokyoHour = (utcHour + 9) % 24;
+    
+    let message = "";
+    
+    // Cloudflare cron triggers are set to run at 09:00 UTC (18:00 Tokyo) and 21:00 UTC (06:00 Tokyo)
+    if (tokyoHour === 18) {
+      message = "🌙 **The night begins.**\nThe city exhales. Somewhere, a door opens.";
+    } else if (tokyoHour === 6) {
+      message = "☀️ **The sun rises.**\nThe night lets go — for now.";
+    }
+
+    if (message) {
+      await fetch(`https://discord.com/api/v10/channels/${env.GAME_CHANNEL_ID}/messages`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: message })
+      });
+    }
+  }
 };
