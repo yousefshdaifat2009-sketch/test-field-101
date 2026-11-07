@@ -135,7 +135,7 @@ export default {
               
               if (player) {
                 const lvl = Number(player.level) || 1;
-                const xp = Math.max(0, Number(player.xp) || 0); // Prevent negative XP
+                const xp = Math.max(0, Number(player.xp) || 0);
                 const xpNeeded = lvl * 100; 
                 
                 const barLength = 10;
@@ -224,7 +224,7 @@ export default {
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
 
-        // --- SIRE SELECTION ---
+        // Sire Selection
         if (cid === 'sire_nazuna' || cid === 'sire_wildcard') {
           ctx.waitUntil((async () => {
             let sireName = "Nazuna Nanakusa";
@@ -238,9 +238,7 @@ export default {
               flavorText = `Nazuna smiles, her fangs catching the moonlight. "Alright. Let's see if you can handle the night."`;
             }
 
-            // Save the track
             await env.DB.prepare(`UPDATE players SET track = 'Vampire Offspring' WHERE id = ?`).bind(userId).run();
-            // Append Sire to stats for now
             await env.DB.prepare(`UPDATE players SET stats = stats || ' | Sire: ' || ? WHERE id = ?`).bind(sireName, userId).run();
 
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
@@ -511,16 +509,37 @@ export default {
               const threadInfo: any = await threadInfoRes.json();
               const parentChannelId = threadInfo.parent_id;
 
-              const webhookRes = await fetch(`https://discord.com/api/v10/channels/${parentChannelId}/webhooks`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: "Nazuna" })
+              // --- REUSE WEBHOOK LOGIC ---
+              let webhookId = "";
+              let webhookToken = "";
+
+              const existingHooksRes = await fetch(`https://discord.com/api/v10/channels/${parentChannelId}/webhooks`, {
+                headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
               });
               
-              if (!webhookRes.ok) throw new Error(`Webhook creation failed. Error: ${await webhookRes.text()}`);
-              const webhookData: any = await webhookRes.json();
+              if (existingHooksRes.ok) {
+                const existingHooks: any = await existingHooksRes.json();
+                const nazunaHook = existingHooks.find((h: any) => h.name === "Nazuna");
+                if (nazunaHook) {
+                  webhookId = nazunaHook.id;
+                  webhookToken = nazunaHook.token;
+                }
+              }
+
+              if (!webhookId) {
+                const webhookRes = await fetch(`https://discord.com/api/v10/channels/${parentChannelId}/webhooks`, {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ name: "Nazuna" })
+                });
+                if (!webhookRes.ok) throw new Error(`Webhook creation failed. Error: ${await webhookRes.text()}`);
+                const webhookData: any = await webhookRes.json();
+                webhookId = webhookData.id;
+                webhookToken = webhookData.token;
+              }
               
-              await fetch(`https://discord.com/api/v10/webhooks/${webhookData.id}/${webhookData.token}?thread_id=${threadId}`, {
+              // Execute webhook
+              await fetch(`https://discord.com/api/v10/webhooks/${webhookId}/${webhookToken}?thread_id=${threadId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: reply, username: "Nazuna Nanakusa" })
