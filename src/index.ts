@@ -26,7 +26,8 @@ export default {
           { name: 'explore', description: 'Explore the city', type: 1 },
           { name: 'progress', description: 'Check your XP and level', type: 1 },
           { name: 'cases', description: 'View your active cases', type: 1 },
-          { name: 'notebook', description: 'View your collected clues', type: 1 }
+          { name: 'notebook', description: 'View your collected clues', type: 1 },
+          { name: 'bonds', description: 'View your relationships with NPCs', type: 1 }
         ])
       });
       return new Response(`Registration response: ${await response.text()}`, { status: 200 });
@@ -51,6 +52,33 @@ export default {
       // --- SLASH COMMANDS ---
       if (interaction.type === InteractionType.APPLICATION_COMMAND) {
         
+        if (interaction.data.name === 'bonds') {
+          ctx.waitUntil((async () => {
+            const bonds = await env.DB.prepare('SELECT * FROM npc_bonds WHERE player_id = ?').bind(userId).all();
+            let content = "**Your Bonds**\n\n";
+            
+            if (bonds.results.length === 0) {
+              content += "You haven't bonded with anyone yet.";
+            } else {
+              bonds.results.forEach((b: any) => {
+                let tier = "Stranger";
+                const pts = Number(b.points);
+                if (pts >= 120) tier = "Best Friend 🟢";
+                else if (pts >= 60) tier = "Trusted 🔵";
+                else if (pts >= 30) tier = "Ally 🟣";
+                else if (pts >= 10) tier = "Acquaintance 🟡";
+
+                content += `**${b.npc_id.toUpperCase()}:** ${tier} (${pts} pts)\n`;
+              });
+            }
+
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
+            });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
         if (interaction.data.name === 'cases') {
           ctx.waitUntil((async () => {
             const quests = await env.DB.prepare('SELECT * FROM quests_progress WHERE player_id = ? AND status = "active"').bind(userId).all();
@@ -196,6 +224,7 @@ export default {
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
 
+        // Character Creation Buttons
         if (cid === 'start_create') {
           return new Response(JSON.stringify({
             type: InteractionResponseType.MODAL,
@@ -242,6 +271,7 @@ export default {
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
+        // --- EXPLORE BUTTONS ---
         if (cid.startsWith('go_')) {
           const location = cid.replace('go_', '');
           const locName = location.charAt(0).toUpperCase() + location.slice(1);
@@ -322,7 +352,6 @@ export default {
               collectedClues = JSON.parse(progress.clues);
             }
 
-            // Find a clue they don't have yet
             const availableClues = allClues.filter(c => !collectedClues.includes(c));
 
             if (availableClues.length === 0) {
@@ -431,6 +460,7 @@ export default {
               const player: any = await env.DB.prepare('SELECT name, xp, level FROM players WHERE id = ?').bind(userId).first();
               const playerName = player ? player.name : "a stranger";
 
+              // AI Reply
               const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
@@ -448,6 +478,7 @@ export default {
               const aiData: any = await aiRes.json();
               const reply = aiData.choices[0].message.content;
 
+              // Send Webhook
               const threadInfoRes = await fetch(`https://discord.com/api/v10/channels/${threadId}`, {
                 headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
               });
@@ -469,6 +500,7 @@ export default {
                 body: JSON.stringify({ content: reply, username: "Nazuna Nanakusa" })
               });
 
+              // Grant XP & Bond
               if (player) {
                 const currentLvl = Number(player.level) || 1;
                 const currentXp = Number(player.xp) || 0;
@@ -482,8 +514,32 @@ export default {
                     headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${currentLvl + 1}.` })
                   });
+
+                  // Check for Level 5 Sire Gate
+                  if (currentLvl + 1 === 5) {
+                    await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
+                      method: 'POST',
+                      headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ 
+                        content: `🌙 **The night notices you.**\n\nYou have reached Level 5. It is time to choose your path. Will you become an Offspring?`,
+                        components: [{ type: 1, components: [
+                          { type: 2, style: 3, label: "Choose Nazuna as Sire", custom_id: "sire_nazuna" },
+                          { type: 2, style: 3, label: "Choose a Wildcard Sire", custom_id: "sire_wildcard" }
+                        ]}]
+                      })
+                    });
+                  }
+
                 } else {
                   await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
+                }
+
+                // Add Bond Point
+                const bond = await env.DB.prepare('SELECT points FROM npc_bonds WHERE player_id = ? AND npc_id = ?').bind(userId, 'nazuna').first();
+                if (bond) {
+                  await env.DB.prepare('UPDATE npc_bonds SET points = points + 1 WHERE player_id = ? AND npc_id = ?').bind(userId, 'nazuna').run();
+                } else {
+                  await env.DB.prepare('INSERT INTO npc_bonds (player_id, npc_id, points) VALUES (?, ?, 1)').bind(userId, 'nazuna').run();
                 }
               }
 
