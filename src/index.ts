@@ -21,7 +21,8 @@ export default {
         body: JSON.stringify([
           { name: 'ping', description: 'Replies with Pong!', type: 1 },
           { name: 'begin', description: 'Start your character creation', type: 1 },
-          { name: 'sheet', description: 'View your character sheet', type: 1 }
+          { name: 'sheet', description: 'View your character sheet', type: 1 },
+          { name: 'explore', description: 'Explore the city', type: 1 }
         ])
       });
       return new Response(`Registration response: ${await response.text()}`, { status: 200 });
@@ -37,12 +38,11 @@ export default {
       }
 
       const interaction = JSON.parse(body);
+      const userId = interaction.member?.user?.id;
 
       if (interaction.type === InteractionType.PING) {
         return new Response(JSON.stringify({ type: InteractionResponseType.PONG }), { headers: { 'Content-Type': 'application/json' } });
       }
-
-      const userId = interaction.member?.user?.id;
 
       // --- SLASH COMMANDS ---
       if (interaction.type === InteractionType.APPLICATION_COMMAND) {
@@ -54,8 +54,7 @@ export default {
               content = `**${player.name}**\n*${player.appearance}*\n\n**Level ${player.level}** | XP: ${player.xp}\n**Trait:** ${player.traits}\n**Background:** ${player.background}\n**Blood Type:** ${player.blood_type}\n\n**Stats:**\n${player.stats}`;
             }
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ content })
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
             });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
@@ -66,8 +65,7 @@ export default {
             const player = await env.DB.prepare('SELECT level FROM players WHERE id = ?').bind(userId).first();
             if (player && player.level > 0) {
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: "You already have a character. Use `/sheet` to view it." })
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You already have a character. Use `/sheet` to view it." })
               });
               return;
             }
@@ -81,18 +79,40 @@ export default {
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
         }
+
+        if (interaction.data.name === 'explore') {
+          const tokyoHour = (new Date().getUTCHours() + 9) % 24;
+          const isNight = tokyoHour >= 18 || tokyoHour < 6;
+          const phaseText = isNight ? "🌙 Night" : "☀️ Day";
+
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: {
+              flags: InteractionResponseFlags.EPHEMERAL,
+              content: `**It is currently ${phaseText} in Tokyo.**\nWhere do you want to go?`,
+              components: [
+                { type: 1, components: [
+                  { type: 2, style: 1, label: "Rooftop", custom_id: "go_rooftop" },
+                  { type: 2, style: 1, label: "Konbini", custom_id: "go_konbini" },
+                  { type: 2, style: 1, label: "Park", custom_id: "go_park" },
+                  { type: 2, style: 1, label: "Your Apartment", custom_id: "go_apartment" }
+                ]}
+              ]
+            }
+          }), { headers: { 'Content-Type': 'application/json' } });
+        }
       }
 
       // --- BUTTONS ---
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
 
+        // Character Creation Buttons
         if (cid === 'start_create') {
           return new Response(JSON.stringify({
             type: InteractionResponseType.MODAL,
             data: {
-              custom_id: 'modal_step1',
-              title: 'Step 1: Who are you?',
+              custom_id: 'modal_step1', title: 'Step 1: Who are you?',
               components: [
                 { type: 1, components: [{ type: 4, custom_id: 'name', label: 'Your Name', style: 1, min_length: 2, max_length: 32, required: true }] },
                 { type: 1, components: [{ type: 4, custom_id: 'appearance', label: 'Describe your appearance', style: 2, min_length: 5, max_length: 100, required: true }] }
@@ -100,75 +120,109 @@ export default {
             }
           }), { headers: { 'Content-Type': 'application/json' } });
         }
-
-        // Handle Trait Selection (Step 2 -> Step 3)
         if (cid.startsWith('trait_')) {
           const trait = cid.replace('trait_', '');
           ctx.waitUntil(env.DB.prepare(`UPDATE players SET traits = ? WHERE id = ?`).bind(trait, userId).run());
           return new Response(JSON.stringify({
             type: InteractionResponseType.UPDATE_MESSAGE,
-            data: {
-              content: `You chose **${trait}**.\n\n**Step 3: What is your background?**`,
-              components: [{ type: 1, components: [
-                { type: 2, style: 1, label: "Student", custom_id: "bg_student" },
-                { type: 2, style: 1, label: "Worker", custom_id: "bg_worker" },
-                { type: 2, style: 1, label: "Drifter", custom_id: "bg_drifter" }
-              ]}]
-            }
+            data: { content: `You chose **${trait}**.\n\n**Step 3: What is your background?**`, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Student", custom_id: "bg_student" }, { type: 2, style: 1, label: "Worker", custom_id: "bg_worker" }, { type: 2, style: 1, label: "Drifter", custom_id: "bg_drifter" }]}] }
           }), { headers: { 'Content-Type': 'application/json' } });
         }
-
-        // Handle Background (Step 3 -> Step 4)
         if (cid.startsWith('bg_')) {
           const bg = cid.replace('bg_', '');
           ctx.waitUntil(env.DB.prepare(`UPDATE players SET background = ? WHERE id = ?`).bind(bg, userId).run());
           return new Response(JSON.stringify({
             type: InteractionResponseType.UPDATE_MESSAGE,
-            data: {
-              content: `You chose **${bg}**.\n\n**Step 4: What is your blood type?**`,
-              components: [{ type: 1, components: [
-                { type: 2, style: 1, label: "Type A", custom_id: "blood_A" },
-                { type: 2, style: 1, label: "Type B", custom_id: "blood_B" },
-                { type: 2, style: 1, label: "Type AB", custom_id: "blood_AB" },
-                { type: 2, style: 1, label: "Type O", custom_id: "blood_O" }
-              ]}]
-            }
+            data: { content: `You chose **${bg}**.\n\n**Step 4: What is your blood type?**`, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Type A", custom_id: "blood_A" }, { type: 2, style: 1, label: "Type B", custom_id: "blood_B" }, { type: 2, style: 1, label: "Type AB", custom_id: "blood_AB" }, { type: 2, style: 1, label: "Type O", custom_id: "blood_O" }]}] }
           }), { headers: { 'Content-Type': 'application/json' } });
         }
-
-        // Handle Blood Type (Step 4 -> Step 5)
         if (cid.startsWith('blood_')) {
           const blood = cid.replace('blood_', '');
           ctx.waitUntil(env.DB.prepare(`UPDATE players SET blood_type = ? WHERE id = ?`).bind(blood, userId).run());
           return new Response(JSON.stringify({
             type: InteractionResponseType.UPDATE_MESSAGE,
-            data: {
-              content: `Blood Type **${blood}**.\n\n**Step 5: Choose your starting stat focus.**`,
-              components: [{ type: 1, components: [
-                { type: 2, style: 1, label: "Balanced", custom_id: "stats_balanced" },
-                { type: 2, style: 1, label: "Charming", custom_id: "stats_charm" },
-                { type: 2, style: 1, label: "Mysterious", custom_id: "stats_mystery" }
-              ]}]
-            }
+            data: { content: `Blood Type **${blood}**.\n\n**Step 5: Choose your starting stat focus.**`, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Balanced", custom_id: "stats_balanced" }, { type: 2, style: 1, label: "Charming", custom_id: "stats_charm" }, { type: 2, style: 1, label: "Mysterious", custom_id: "stats_mystery" }]}] }
+          }), { headers: { 'Content-Type': 'application/json' } });
+        }
+        if (cid.startsWith('stats_')) {
+          const statType = cid.replace('stats_', '');
+          let statsStr = statType === 'balanced' ? "Charm 3, Mystery 3, Nerve 3, Empathy 3, Night-sense 1" : statType === 'charm' ? "Charm 5, Mystery 2, Nerve 2, Empathy 3, Night-sense 1" : "Charm 1, Mystery 5, Nerve 3, Empathy 2, Night-sense 2";
+          ctx.waitUntil(env.DB.prepare(`UPDATE players SET stats = ?, level = 1 WHERE id = ?`).bind(statsStr, userId).run());
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.UPDATE_MESSAGE,
+            data: { content: `**Character Creation Complete!**\n\nUse \`/sheet\` to view your profile. The night awaits.`, components: [] }
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // Handle Stats & Finish (Step 5 -> Done)
-        if (cid.startsWith('stats_')) {
-          const statType = cid.replace('stats_', '');
-          let statsStr = "";
-          if (statType === 'balanced') statsStr = "Charm 3, Mystery 3, Nerve 3, Empathy 3, Night-sense 1";
-          if (statType === 'charm') statsStr = "Charm 5, Mystery 2, Nerve 2, Empathy 3, Night-sense 1";
-          if (statType === 'mystery') statsStr = "Charm 1, Mystery 5, Nerve 3, Empathy 2, Night-sense 2";
-
-          ctx.waitUntil(env.DB.prepare(`UPDATE players SET stats = ?, level = 1 WHERE id = ?`).bind(statsStr, userId).run());
+        // --- EXPLORE BUTTONS ---
+        if (cid.startsWith('go_')) {
+          const location = cid.replace('go_', '');
+          const locName = location.charAt(0).toUpperCase() + location.slice(1);
           
+          ctx.waitUntil((async () => {
+            // 1. Create a thread
+            const threadRes = await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/threads`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: locName, type: 11, auto_archive_duration: 60 })
+            });
+            const threadData: any = await threadRes.json();
+            const threadId = threadData.id;
+
+            // 2. Save scene to DB
+            await env.DB.prepare(`INSERT INTO scenes (id, channel_id, location) VALUES (?, ?, ?)`).bind(threadId, interaction.channel_id, location).run();
+
+            // 3. Ask AI to describe the scene
+            const tokyoHour = (new Date().getUTCHours() + 9) % 24;
+            const isNight = tokyoHour >= 18 || tokyoHour < 6;
+            const timeStr = isNight ? "night" : "day";
+
+            const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model: 'openai/gpt-oss-20b',
+                messages: [{ role: 'system', content: `You are a narrator for Call of the Night. Write a 2-sentence atmospheric description of a ${locName} at ${timeStr}. Be melancholic and brief.` }],
+                max_tokens: 80
+              })
+            });
+            const aiData: any = await aiRes.json();
+            const desc = aiData.choices[0].message.content;
+
+            // 4. Send message to the thread
+            await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                content: `**${locName}**\n\n${desc}`,
+                components: [{ type: 1, components: [{ type: 2, style: 4, label: "Leave", custom_id: "leave_scene" }] }]
+              })
+            });
+
+            // 5. Delete the ephemeral message
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+              method: 'DELETE'
+            });
+          })());
+
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        // --- LEAVE SCENE ---
+        if (cid === 'leave_scene') {
+          ctx.waitUntil((async () => {
+             // Archive the thread
+             await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, {
+              method: 'PATCH',
+              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ archived: true })
+            });
+             // Mark scene closed in DB
+             await env.DB.prepare(`UPDATE scenes SET status = 'closed' WHERE id = ?`).bind(interaction.channel_id).run();
+          })());
           return new Response(JSON.stringify({
-            type: InteractionResponseType.UPDATE_MESSAGE,
-            data: {
-              content: `**Character Creation Complete!**\n\nUse \`/sheet\` to view your profile. The night awaits.`,
-              components: []
-            }
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: { content: "You leave the scene. The night moves on." }
           }), { headers: { 'Content-Type': 'application/json' } });
         }
       }
@@ -188,14 +242,7 @@ export default {
 
           return new Response(JSON.stringify({
             type: InteractionResponseType.UPDATE_MESSAGE,
-            data: {
-              content: `Name: **${name}**\nAppearance: *${appearance}*\n\n**Step 2: What is your defining trait?**`,
-              components: [{ type: 1, components: [
-                { type: 2, style: 1, label: "Insomnia", custom_id: "trait_Insomnia" },
-                { type: 2, style: 1, label: "Night Owl", custom_id: "trait_NightOwl" },
-                { type: 2, style: 1, label: "Mysterious", custom_id: "trait_Mysterious" }
-              ]}]
-            }
+            data: { content: `Name: **${name}**\nAppearance: *${appearance}*\n\n**Step 2: What is your defining trait?**`, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Insomnia", custom_id: "trait_Insomnia" }, { type: 2, style: 1, label: "Night Owl", custom_id: "trait_NightOwl" }, { type: 2, style: 1, label: "Mysterious", custom_id: "trait_Mysterious" }]}] }
           }), { headers: { 'Content-Type': 'application/json' } });
         }
       }
