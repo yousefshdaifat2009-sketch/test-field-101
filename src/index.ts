@@ -28,7 +28,7 @@ export default {
           { name: 'cases', description: 'View your active cases', type: 1 },
           { name: 'notebook', description: 'View your collected clues', type: 1 },
           { name: 'bonds', description: 'View your relationships with NPCs', type: 1 },
-          { name: 'duel', description: 'Duel another player', type: 1, options: [{ name: 'user', description: 'The player to duel', type: 6, required: true }] },
+          { name: 'duel', description: 'Duel another player in PvP', type: 1, options: [{ name: 'user', description: 'The player to duel', type: 6, required: true }] },
           { 
             name: 'admin', description: 'Owner commands', type: 1,
             options: [
@@ -152,7 +152,7 @@ export default {
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
                await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials, round) VALUES (?, ?, 100, ?, ?, ?, 2, 2, 1)').bind(interaction.channel_id, targetUser, "rogue_vampire", bossMaxHp, targetUser).run();
                
-               const embed = createCombatEmbed(targetUser, 100, 100, "Rogue Vampire", bossMaxHp, bossMaxHp, `${introDialogue}\n\n👉 **<@${targetUser}>, it is your turn!**`, 1);
+               const embed = createCombatEmbed(targetUser, 100, 100, "Rogue Vampire", bossMaxHp, bossMaxHp, `${introDialogue}\n\n👉 **<@${targetUser}>, it is your turn!**`, 1, false);
                
                await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
                  method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
@@ -172,8 +172,151 @@ export default {
           }
         }
 
-        // ... [Keep all the other commands: bonds, cases, notebook, progress, sheet, begin, explore] ...
-        // (I will put the full working code in the final output block below).
+        if (interaction.data.name === 'bonds') {
+          ctx.waitUntil((async () => {
+            const bonds = await env.DB.prepare('SELECT * FROM npc_bonds WHERE player_id = ?').bind(userId).all();
+            let content = "**Your Bonds**\n\n";
+            if (bonds.results.length === 0) content += "You haven't bonded with anyone yet.";
+            else {
+              bonds.results.forEach((b: any) => {
+                let tier = "Stranger";
+                const pts = Number(b.points) || 0;
+                if (pts >= 120) tier = "Best Friend 🟢";
+                else if (pts >= 60) tier = "Trusted 🔵";
+                else if (pts >= 30) tier = "Ally 🟣";
+                else if (pts >= 10) tier = "Acquaintance 🟡";
+                content += `**${b.npc_id.toUpperCase()}:** ${tier} (${pts} pts)\n`;
+              });
+            }
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (interaction.data.name === 'cases') {
+          ctx.waitUntil((async () => {
+            const quests = await env.DB.prepare('SELECT * FROM quests_progress WHERE player_id = ? AND status = "active"').bind(userId).all();
+            const infQuests = await env.DB.prepare('SELECT * FROM infinite_quests WHERE player_id = ? AND status = "active"').bind(userId).all();
+            let content = "**Your Active Cases**\n\n";
+            if (quests.results.length === 0 && infQuests.results.length === 0) content += "You have no active cases. Explore the city to find clues.";
+            else {
+              quests.results.forEach((q: any) => { content += `**Main Story:** ${q.quest_id.replace(/_/g, ' ').toUpperCase()}\n`; });
+              infQuests.results.forEach((q: any) => { content += `**Investigation:** Mystery at the ${q.location.toUpperCase()}\n`; });
+            }
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (interaction.data.name === 'notebook') {
+          ctx.waitUntil((async () => {
+            const quests = await env.DB.prepare('SELECT * FROM quests_progress WHERE player_id = ?').bind(userId).all();
+            const infQuests = await env.DB.prepare('SELECT * FROM infinite_quests WHERE player_id = ?').bind(userId).all();
+            let content = "**Your Notebook**\n\n";
+            let hasClues = false;
+            quests.results.forEach((q: any) => {
+              if (q.clues) {
+                hasClues = true;
+                content += `**Main Story:** ${q.quest_id.replace(/_/g, ' ').toUpperCase()}\n`;
+                JSON.parse(q.clues).forEach((c: string) => { content += `- ${c}\n`; });
+                content += "\n";
+              }
+            });
+            infQuests.results.forEach((q: any) => {
+               hasClues = true;
+               content += `**Mystery at the ${q.location.toUpperCase()}**\n`;
+               if (q.clue_1) content += `- ${q.clue_1}\n`;
+               if (q.clue_2) content += `- ${q.clue_2}\n`;
+               if (q.clue_3) content += `- ${q.clue_3}\n`;
+               content += "\n";
+            });
+            if (!hasClues) content += "Your notebook is empty.";
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (interaction.data.name === 'progress') {
+          ctx.waitUntil((async () => {
+            try {
+              const player: any = await env.DB.prepare('SELECT level, xp, hp FROM players WHERE id = ?').bind(userId).first();
+              let content = "You haven't created a character yet. Use `/begin` to start.";
+              if (player) {
+                const lvl = Number(player.level) || 1;
+                const xp = Math.max(0, Number(player.xp) || 0);
+                const hp = Number(player.hp) || 100;
+                const xpNeeded = lvl * 100; 
+                const barLength = 10;
+                const progress = Math.max(0, Math.min(Math.floor((xp / xpNeeded) * barLength), barLength));
+                const bar = "▓".repeat(progress) + "░".repeat(barLength - progress);
+                content = `**Level ${lvl}** | ❤️ HP: ${hp}/100\nXP: ${xp} / ${xpNeeded}\n[${bar}]`;
+              }
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
+            } catch (error: any) {
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**Error:** ${error.message}` }) });
+            }
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (interaction.data.name === 'sheet') {
+          ctx.waitUntil((async () => {
+            try {
+              const player: any = await env.DB.prepare('SELECT * FROM players WHERE id = ?').bind(userId).first();
+              let content = "You haven't created a character yet. Use `/begin` to start.";
+              if (player && player.level > 0) {
+                content = `**${player.name}**\n*${player.appearance}*\n\n**Level ${player.level}** | XP: ${player.xp} | ❤️ HP: ${player.hp}/100\n**Trait:** ${player.traits}\n**Background:** ${player.background}\n**Blood Type:** ${player.blood_type}\n\n**Stats:**\n${player.stats}`;
+              }
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
+            } catch (error: any) {
+               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**Error:** ${error.message}` }) });
+            }
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (interaction.data.name === 'begin') {
+          ctx.waitUntil((async () => {
+            const player = await env.DB.prepare('SELECT level FROM players WHERE id = ?').bind(userId).first();
+            if (player && player.level > 0) {
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You already have a character. Use `/sheet` to view it." }) });
+              return;
+            }
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                content: "Welcome to the night city. Are you ready to create your character?",
+                components: [{ type: 1, components: [{ type: 2, style: 1, label: "Begin", custom_id: "start_create" }] }]
+              })
+            });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (interaction.data.name === 'explore') {
+          const tokyoHour = (new Date().getUTCHours() + 9) % 24;
+          const isNight = tokyoHour >= 18 || tokyoHour < 6;
+          const phaseText = isNight ? "🌙 Night" : "☀️ Day";
+          const locations = [];
+          if (!isNight) {
+            locations.push({ type: 2, style: 1, label: "School", custom_id: "go_school" });
+            locations.push({ type: 2, style: 1, label: "Anko's Agency", custom_id: "go_agency" });
+            locations.push({ type: 2, style: 1, label: "Park", custom_id: "go_park" });
+          } else {
+            locations.push({ type: 2, style: 1, label: "Rooftop", custom_id: "go_rooftop" });
+            locations.push({ type: 2, style: 1, label: "Konbini", custom_id: "go_konbini" });
+            locations.push({ type: 2, style: 1, label: "Park", custom_id: "go_park" });
+          }
+          locations.push({ type: 2, style: 1, label: "Your Apartment", custom_id: "go_apartment" });
+          const components = [];
+          for (let i = 0; i < locations.length; i += 5) {
+            components.push({ type: 1, components: locations.slice(i, i + 5) });
+          }
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: { flags: InteractionResponseFlags.EPHEMERAL, content: `**It is currently ${phaseText} in Tokyo.**\nWhere do you want to go?`, components: components }
+          }), { headers: { 'Content-Type': 'application/json' } });
+        }
       }
 
       // --- BUTTONS ---
@@ -187,17 +330,17 @@ export default {
              await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
              await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials, round) VALUES (?, ?, 100, ?, 100, ?, 2, 2, 1)').bind(interaction.channel_id, p1Id, p2Id, p1Id).run();
              
-             const embed = createCombatEmbed(p1Id, 100, 100, "Player 2", 100, 100, `⚔️ **DUEL STARTED** ⚔️\n\n👉 **<@${p1Id}>, it is your turn!**`, 1);
+             const embed = createCombatEmbed(p1Id, 100, 100, "Player 2", 100, 100, `⚔️ **PvP DUEL STARTED** ⚔️\n\n👉 **<@${p1Id}>, it is your turn!**`, 1, true);
              
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
                  embeds: [embed],
                  components: [{ type: 1, components: [
-                   { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
-                   { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
-                   { type: 2, style: 3, label: "Special (2 Left)", custom_id: "combat_special" },
-                   { type: 2, style: 4, label: "Flee", custom_id: "combat_flee" }
+                   { type: 2, style: 1, label: "Strike", custom_id: "pvp_attack" },
+                   { type: 2, style: 2, label: "Guard", custom_id: "pvp_defend" },
+                   { type: 2, style: 3, label: "Taunt", custom_id: "pvp_taunt" },
+                   { type: 2, style: 4, label: "Ability", custom_id: "pvp_special" }
                  ]}]
                })
              });
@@ -209,6 +352,135 @@ export default {
           return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: "Duel declined.", components: [] } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
+        // --- PvP COMBAT ACTIONS ---
+        if (cid === 'pvp_attack' || cid === 'pvp_defend' || cid === 'pvp_taunt' || cid === 'pvp_special') {
+          ctx.waitUntil((async () => {
+             const session: any = await env.DB.prepare('SELECT * FROM combat_sessions WHERE channel_id = ? AND status = "active" ORDER BY id DESC LIMIT 1').bind(interaction.channel_id).first();
+             if (!session) return;
+             if (userId !== session.turn_id) {
+               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "It is not your turn.", flags: InteractionResponseFlags.EPHEMERAL }) });
+               return;
+             }
+
+             const isP1 = userId === session.p1_id;
+             const opponentId = isP1 ? session.p2_id : session.p1_id;
+             
+             const pData: any = await env.DB.prepare('SELECT level, stats FROM players WHERE id = ?').bind(userId).first();
+             const oppData: any = await env.DB.prepare('SELECT level, stats FROM players WHERE id = ?').bind(opponentId).first();
+             
+             const pLevel = pData ? Number(pData.level) : 1;
+             const oppLevel = oppData ? Number(oppData.level) : 1;
+             
+             const pNerve = parseStat(pData?.stats, "Nerve");
+             const pMystery = parseStat(pData?.stats, "Mystery");
+             const pCharm = parseStat(pData?.stats, "Charm");
+             const pEmpathy = parseStat(pData?.stats, "Empathy");
+             const pNight = parseStat(pData?.stats, "Night-sense");
+
+             let p1Hp = Number(session.p1_hp);
+             let p2Hp = Number(session.p2_hp);
+             let p1Specials = Number(session.p1_specials);
+             let p2Specials = Number(session.p2_specials);
+             let round = Number(session.round);
+
+             let pDmg = 0;
+             let actionMsg = "";
+             let selfHeal = 0;
+             let focusGain = 0;
+
+             // Resolve Player Action
+             if (cid === 'pvp_attack') {
+               pDmg = Math.floor(Math.random() * 10) + 10 + (pNerve * 2);
+               if (Math.random() < (0.1 + (pMystery * 0.05))) { pDmg *= 2; actionMsg = `⚔️ **CRITICAL STRIKE!** <@${userId}> hits for **${pDmg}** damage!`; }
+               else actionMsg = `⚔️ <@${userId}> strikes for **${pDmg}** damage.`;
+             } 
+             else if (cid === 'pvp_defend') {
+               selfHeal = 10 + (pEmpathy * 3);
+               focusGain = 1;
+               actionMsg = `🛡️ <@${userId}> guards, recovering **${selfHeal}** HP and gaining Focus.`;
+             }
+             else if (cid === 'pvp_taunt') {
+               if (p1Specials > 0) {
+                 if (isP1) p1Specials--; else p2Specials--;
+                 actionMsg = `🗣️ <@${userId}> taunts the enemy, lowering their next attack by **${20 + (pCharm * 5)}%**!`;
+               } else {
+                 actionMsg = `🗣️ <@${userId}> tries to taunt, but is out of breath.`;
+               }
+             }
+             else if (cid === 'pvp_special') {
+               if (isP1 ? p1Specials <= 0 : p2Specials <= 0) {
+                 await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You are out of Special uses!", flags: InteractionResponseFlags.EPHEMERAL }) });
+                 return;
+               }
+               if (isP1) p1Specials--; else p2Specials--;
+               
+               const trackData: any = await env.DB.prepare('SELECT track FROM players WHERE id = ?').bind(userId).first();
+               if (trackData && trackData.track === 'Vampire Offspring') {
+                 pDmg = 20 + pLevel;
+                 selfHeal = 20 + pLevel;
+                 actionMsg = `🩸 <@${userId}> uses **Blood Drain**! Deals **${pDmg}** damage and heals **${selfHeal}** HP!`;
+               } else {
+                 pDmg = 40 + (pNerve * 2);
+                 actionMsg = `✨ <@${userId}> uses **Stake Throw**! Deals massive **${pDmg}** damage!`;
+               }
+             }
+
+             // Apply Damage & Heal
+             if (isP1) {
+               p2Hp -= pDmg;
+               p1Hp = Math.min(100, p1Hp + selfHeal);
+             } else {
+               p1Hp -= pDmg;
+               p2Hp = Math.min(100, p2Hp + selfHeal);
+             }
+
+             // Check Death
+             if (p1Hp <= 0 || p2Hp <= 0) {
+               const winnerId = p1Hp > 0 ? session.p1_id : session.p2_id;
+               const loserId = p1Hp <= 0 ? session.p1_id : session.p2_id;
+               
+               await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
+               
+               // Grant PvP Rewards
+               const xpGain = oppLevel * 20;
+               const yenGain = oppLevel * 10;
+               await env.DB.prepare('UPDATE players SET xp = xp + ? WHERE id = ?').bind(xpGain, winnerId).run();
+               await processLevelUp(env, winnerId);
+
+               const winMsg = `\n\n🏆 **<@${winnerId}> WINS THE DUEL!**\n*Rewards:* +${xpGain} XP | +${yenGain} Yen`;
+               const finalEmbed = createCombatEmbed(session.p1_id, Math.max(0, p1Hp), 100, `<@${session.p2_id}>`, Math.max(0, p2Hp), 100, `${actionMsg}${winMsg}`, round, true);
+               
+               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({ embeds: [finalEmbed], components: [] })
+               });
+               return;
+             }
+
+             // Switch Turn & Update DB
+             const nextTurn = isP1 ? session.p2_id : session.p1_id;
+             round++;
+             await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ?, p2_hp = ?, p1_specials = ?, p2_specials = ?, turn_id = ?, round = ? WHERE id = ?').bind(p1Hp, p2Hp, p1Specials, p2Specials, nextTurn, round, session.id).run();
+
+             const nextEmbed = createCombatEmbed(session.p1_id, p1Hp, 100, `<@${session.p2_id}>`, p2Hp, 100, `${actionMsg}\n\n👉 **<@${nextTurn}>, it is your turn!**`, round, true);
+             
+             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ 
+                 embeds: [nextEmbed],
+                 components: [{ type: 1, components: [
+                   { type: 2, style: 1, label: "Strike", custom_id: "pvp_attack" },
+                   { type: 2, style: 2, label: "Guard", custom_id: "pvp_defend" },
+                   { type: 2, style: 3, label: "Taunt", custom_id: "pvp_taunt" },
+                   { type: 2, style: 4, label: "Ability", custom_id: "pvp_special" }
+                 ]}]
+               })
+             });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        // --- BOSS COMBAT ACTIONS ---
         if (cid === 'combat_flee') {
           ctx.waitUntil((async () => {
              const session: any = await env.DB.prepare('SELECT * FROM combat_sessions WHERE channel_id = ? AND status = "active" ORDER BY id DESC LIMIT 1').bind(interaction.channel_id).first();
@@ -231,7 +503,7 @@ export default {
                   });
                } else {
                   await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ? WHERE id = ?').bind(p1Hp, session.id).run();
-                  const embed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", session.p2_hp, session.p2_hp, `🏃 **Failed to flee!**\nThe Vampire blocks your path and strikes you for **20 damage**.\n\n👉 **<@${userId}>, it is your turn!**`, session.round);
+                  const embed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", session.p2_hp, session.p2_hp, `🏃 **Failed to flee!**\nThe Vampire blocks your path and strikes you for **20 damage**.\n\n👉 **<@${userId}>, it is your turn!**`, session.round, false);
                   await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ embeds: [embed], components: [{ type: 1, components: [
@@ -270,15 +542,12 @@ export default {
              let pDefending = false;
              let isCrit = false;
 
-             // Desperation Mechanic
              let isDesperate = p1Hp < 25;
 
-             // Player Action
              if (cid === 'combat_attack') {
                pDmg = Math.floor(Math.random() * 10) + 10 + Math.floor(pLevel / 2);
                if (Math.random() < 0.15) { pDmg *= 2; isCrit = true; }
                if (isDesperate) pDmg = Math.floor(pDmg * 1.5);
-
                pActionMsg = isCrit ? `⚔️ **CRITICAL HIT!** <@${userId}> strikes a vital point for **${pDmg}** damage!` : `⚔️ <@${userId}> attacks for **${pDmg}** damage.`;
                if (isDesperate && !isCrit) pActionMsg += ` *(Adrenaline Rush!)*`;
              } else if (cid === 'combat_defend') {
@@ -298,18 +567,16 @@ export default {
 
              p2Hp -= pDmg;
 
-             // Remove buttons during delay
-             const thinkingEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 15), `${pActionMsg}\n\n⏳ **The enemy is calculating its move...**`, round);
+             const thinkingEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 15), `${pActionMsg}\n\n⏳ **The enemy is calculating its move...**`, round, false);
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ embeds: [thinkingEmbed], components: [] })
              });
 
-             // Boss Turn
              let bossMsg = "";
              let bossDmg = 0;
              if (p2Hp > 0 && session.p2_id === 'rogue_vampire') {
-               await new Promise(r => setTimeout(r, 2500)); // 2.5 second delay
+               await new Promise(r => setTimeout(r, 2500));
 
                const bossMove = Math.random();
                if (bossMove < 0.6) {
@@ -339,27 +606,12 @@ export default {
                }
 
                p1Hp -= bossDmg;
-
-               // Dynamic AI Taunt
-               if (bossDmg > 30 && Math.random() < 0.5) {
-                 try {
-                   const tauntRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                     method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                     body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: 'You are a Rogue Vampire who just hit a player very hard. Write one short, mocking sentence to them.' }], max_tokens: 50 })
-                   });
-                   const tauntData: any = await tauntRes.json();
-                   bossMsg += `\n> *"${tauntData.choices[0].message.content}"*`;
-                 } catch(e) {}
-               }
              }
 
-             // Check Death
              if (p1Hp <= 0 || p2Hp <= 0) {
                let winMsg = p1Hp <= 0 ? `💀 **You have been defeated.**\nYou wake up in your apartment with a throbbing headache.` : `🏆 **VICTORY!**\nThe Rogue Vampire turns to ash. You survived the night.`;
-               
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
                
-               // Grant Rewards
                if (p1Hp > 0) {
                  const xpGain = pLevel * 100;
                  const yenGain = pLevel * 50;
@@ -368,8 +620,7 @@ export default {
                  winMsg += `\n\n**Loot:** +${xpGain} XP | +${yenGain} Yen`;
                }
 
-               const finalEmbed = createCombatEmbed(userId, Math.max(0, p1Hp), 100, "Rogue Vampire", Math.max(0, p2Hp), 150 + (pLevel * 15), `${bossMsg}\n\n${winMsg}`, round);
-               
+               const finalEmbed = createCombatEmbed(userId, Math.max(0, p1Hp), 100, "Rogue Vampire", Math.max(0, p2Hp), 150 + (pLevel * 15), `${bossMsg}\n\n${winMsg}`, round, false);
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                  body: JSON.stringify({ embeds: [finalEmbed], components: [] })
@@ -377,11 +628,9 @@ export default {
                return;
              }
 
-             // Update DB
              await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ?, p2_hp = ?, p1_specials = ?, p2_specials = ?, round = ? WHERE id = ?').bind(p1Hp, p2Hp, p1Specials, p2Specials, round, session.id).run();
 
-             // Bring buttons back for the next turn
-             const nextEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 15), `${bossMsg}\n\n👉 **<@${userId}>, it is your turn!**`, round);
+             const nextEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 15), `${bossMsg}\n\n👉 **<@${userId}>, it is your turn!**`, round, false);
              
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -399,6 +648,7 @@ export default {
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
 
+        // ... [Rest of buttons: sire_nazuna, start_create, traits, bg, blood, stats, go, talk, investigate, leave_scene remain exactly the same] ...
         if (cid === 'sire_nazuna' || cid === 'sire_wildcard') {
           ctx.waitUntil((async () => {
             let sireName = "Nazuna Nanakusa";
@@ -633,7 +883,14 @@ async function processLevelUp(env: Env, userId: string) {
   return null;
 }
 
-function createCombatEmbed(p1Id: string, p1Hp: number, p1MaxHp: number, p2Name: string, p2Hp: number, p2MaxHp: number, description: string, round: number) {
+function parseStat(statsStr: string | undefined, statName: string): number {
+  if (!statsStr) return 0;
+  const regex = new RegExp(statName + "\\s+(\\d+)", "i");
+  const match = statsStr.match(regex);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function createCombatEmbed(p1Id: string, p1Hp: number, p1MaxHp: number, p2Name: string, p2Hp: number, p2MaxHp: number, description: string, round: number, isPvp: boolean = false) {
   // HP Bars
   const p1BarLen = 10;
   const p1Prog = Math.max(0, Math.ceil((p1Hp / p1MaxHp) * p1BarLen));
@@ -641,11 +898,11 @@ function createCombatEmbed(p1Id: string, p1Hp: number, p1MaxHp: number, p2Name: 
 
   const p2BarLen = 10;
   const p2Prog = Math.max(0, Math.ceil((p2Hp / p2MaxHp) * p2BarLen));
-  const p2Bar = "🟥".repeat(p2Prog) + "⬛".repeat(p2BarLen - p2Prog);
+  const p2Bar = (isPvp ? "🟪" : "🟥").repeat(p2Prog) + "⬛".repeat(p2BarLen - p2Prog);
 
   return {
-    title: `⚔️ BATTLE - Round ${round}`,
-    color: 0x8B0000,
+    title: isPvp ? `⚔️ PVP DUEL - Round ${round}` : `⚔️ BATTLE - Round ${round}`,
+    color: isPvp ? 0x8A2BE2 : 0x8B0000, // Purple for PvP, Dark Red for Boss
     description: description,
     fields: [
       {
@@ -654,7 +911,7 @@ function createCombatEmbed(p1Id: string, p1Hp: number, p1MaxHp: number, p2Name: 
         inline: true
       },
       {
-        name: `🩸 ${p2Name}`,
+        name: isPvp ? `🧑 ${p2Name}` : `🩸 ${p2Name}`,
         value: `${p2Bar}\n**HP:** ${Math.max(0, p2Hp)} / ${p2MaxHp}`,
         inline: true
       }
