@@ -137,17 +137,25 @@ export default {
             ctx.waitUntil((async () => {
                const playerData: any = await env.DB.prepare('SELECT level FROM players WHERE id = ?').bind(targetUser).first();
                const pLevel = playerData ? Number(playerData.level) : 1;
-               const bossMaxHp = 100 + (pLevel * 15);
+               
+               // BALANCE FIX: Boss HP is lower so players can actually win
+               const bossMaxHp = 50 + (pLevel * 10);
                
                let introDialogue = "A cold wind blows through the abandoned warehouse. The Rogue Vampire steps out of the shadows, its eyes glowing red.";
+               let bossTaunt = "You've wandered too deep into the night, human.";
+               
                try {
                  const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                    method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
                    body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: 'You are a Rogue Vampire in Call of the Night. Write one intimidating, short sentence to a player who just confronted you.' }], max_tokens: 100 })
                  });
                  const aiData: any = await aiRes.json();
-                 introDialogue += `\n> *"${aiData.choices[0].message.content}"*`;
+                 if (aiData.choices && aiData.choices[0].message.content) {
+                   bossTaunt = aiData.choices[0].message.content;
+                 }
                } catch(e) {}
+               
+               introDialogue += `\n> *"${bossTaunt}"*`;
 
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
                await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials, round) VALUES (?, ?, 100, ?, ?, ?, 2, 2, 1)').bind(interaction.channel_id, targetUser, "rogue_vampire", bossMaxHp, targetUser).run();
@@ -352,7 +360,7 @@ export default {
           return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: "Duel declined.", components: [] } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- PvP COMBAT ACTIONS ---
+        // --- PVP COMBAT ACTIONS ---
         if (cid === 'pvp_attack' || cid === 'pvp_defend' || cid === 'pvp_taunt' || cid === 'pvp_special') {
           ctx.waitUntil((async () => {
              const session: any = await env.DB.prepare('SELECT * FROM combat_sessions WHERE channel_id = ? AND status = "active" ORDER BY id DESC LIMIT 1').bind(interaction.channel_id).first();
@@ -441,7 +449,6 @@ export default {
                
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
                
-               // Grant PvP Rewards
                const xpGain = oppLevel * 20;
                const yenGain = oppLevel * 10;
                await env.DB.prepare('UPDATE players SET xp = xp + ? WHERE id = ?').bind(xpGain, winnerId).run();
@@ -544,8 +551,9 @@ export default {
 
              let isDesperate = p1Hp < 25;
 
+             // BALANCE FIX: Player damage is higher
              if (cid === 'combat_attack') {
-               pDmg = Math.floor(Math.random() * 10) + 10 + Math.floor(pLevel / 2);
+               pDmg = Math.floor(Math.random() * 10) + 15 + pLevel;
                if (Math.random() < 0.15) { pDmg *= 2; isCrit = true; }
                if (isDesperate) pDmg = Math.floor(pDmg * 1.5);
                pActionMsg = isCrit ? `⚔️ **CRITICAL HIT!** <@${userId}> strikes a vital point for **${pDmg}** damage!` : `⚔️ <@${userId}> attacks for **${pDmg}** damage.`;
@@ -560,14 +568,14 @@ export default {
                   return;
                }
                p1Specials--;
-               pDmg = 35 + pLevel;
+               pDmg = 40 + pLevel;
                if (isDesperate) pDmg = Math.floor(pDmg * 1.5);
                pActionMsg = `✨ <@${userId}> unleashes their Special Ability for massive **${pDmg}** damage!`;
              }
 
              p2Hp -= pDmg;
 
-             const thinkingEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 15), `${pActionMsg}\n\n⏳ **The enemy is calculating its move...**`, round, false);
+             const thinkingEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 10), `${pActionMsg}\n\n⏳ **The enemy is calculating its move...**`, round, false);
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ embeds: [thinkingEmbed], components: [] })
@@ -579,19 +587,21 @@ export default {
                await new Promise(r => setTimeout(r, 2500));
 
                const bossMove = Math.random();
+               
+               // BALANCE FIX: Boss damage is lower
                if (bossMove < 0.6) {
-                 bossDmg = Math.floor(Math.random() * 10) + 12 + Math.floor(pLevel * 1.5);
+                 bossDmg = Math.floor(Math.random() * 5) + 8 + Math.floor(pLevel * 0.5);
                  bossMsg = `🩸 The Vampire lunges with unnatural speed, tearing into you for **${bossDmg}** damage!`;
                } else if (bossMove < 0.8) {
                  bossMsg = `🛡️ The Vampire dissolves into shadows, avoiding damage and recovering its strength.`;
-                 p2Hp = Math.min(150 + (pLevel * 15), p2Hp + 20);
+                 p2Hp = Math.min(150 + (pLevel * 10), p2Hp + 15);
                } else {
                  if (p2Specials > 0) {
                    p2Specials--;
-                   bossDmg = 25 + pLevel;
+                   bossDmg = 15 + pLevel;
                    bossMsg = `🦇 The Vampire vanishes and reappears behind you, using **Shadow Strike** for **${bossDmg}** damage!`;
                  } else {
-                   bossDmg = Math.floor(Math.random() * 10) + 12 + Math.floor(pLevel * 1.5);
+                   bossDmg = Math.floor(Math.random() * 5) + 8 + Math.floor(pLevel * 0.5);
                    bossMsg = `🩸 The Vampire strikes for **${bossDmg}** damage!`;
                  }
                }
@@ -606,6 +616,24 @@ export default {
                }
 
                p1Hp -= bossDmg;
+
+               // GUARANTEED AI TAUNT
+               if (Math.random() < 0.6) {
+                 try {
+                   const tauntRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                     method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+                     body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: 'You are a Rogue Vampire who just hit a player. Write one short, mocking sentence to them.' }], max_tokens: 50 })
+                   });
+                   const tauntData: any = await tauntRes.json();
+                   if (tauntData.choices && tauntData.choices[0].message.content) {
+                     bossMsg += `\n> *"${tauntData.choices[0].message.content}"*`;
+                   } else {
+                     bossMsg += `\n> *"Is that all you have?"*`; // Fallback
+                   }
+                 } catch(e) {
+                   bossMsg += `\n> *"You bleed too easily."*`; // Fallback
+                 }
+               }
              }
 
              if (p1Hp <= 0 || p2Hp <= 0) {
@@ -620,7 +648,7 @@ export default {
                  winMsg += `\n\n**Loot:** +${xpGain} XP | +${yenGain} Yen`;
                }
 
-               const finalEmbed = createCombatEmbed(userId, Math.max(0, p1Hp), 100, "Rogue Vampire", Math.max(0, p2Hp), 150 + (pLevel * 15), `${bossMsg}\n\n${winMsg}`, round, false);
+               const finalEmbed = createCombatEmbed(userId, Math.max(0, p1Hp), 100, "Rogue Vampire", Math.max(0, p2Hp), 150 + (pLevel * 10), `${bossMsg}\n\n${winMsg}`, round, false);
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                  body: JSON.stringify({ embeds: [finalEmbed], components: [] })
@@ -630,7 +658,7 @@ export default {
 
              await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ?, p2_hp = ?, p1_specials = ?, p2_specials = ?, round = ? WHERE id = ?').bind(p1Hp, p2Hp, p1Specials, p2Specials, round, session.id).run();
 
-             const nextEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 15), `${bossMsg}\n\n👉 **<@${userId}>, it is your turn!**`, round, false);
+             const nextEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 10), `${bossMsg}\n\n👉 **<@${userId}>, it is your turn!**`, round, false);
              
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
