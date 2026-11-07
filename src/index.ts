@@ -13,7 +13,6 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // 1. Register Commands
     if (url.pathname === '/register') {
       const registerUrl = `https://discord.com/api/v10/applications/${env.DISCORD_APP_ID}/commands`;
       const response = await fetch(registerUrl, {
@@ -28,7 +27,6 @@ export default {
       return new Response(`Registration response: ${await response.text()}`, { status: 200 });
     }
 
-    // 2. Handle Interactions
     if (request.method === 'POST') {
       const signature = request.headers.get('X-Signature-Ed25519');
       const timestamp = request.headers.get('X-Signature-Timestamp');
@@ -44,21 +42,16 @@ export default {
         return new Response(JSON.stringify({ type: InteractionResponseType.PONG }), { headers: { 'Content-Type': 'application/json' } });
       }
 
+      const userId = interaction.member?.user?.id;
+
       // --- SLASH COMMANDS ---
       if (interaction.type === InteractionType.APPLICATION_COMMAND) {
-        const userId = interaction.member.user.id;
-        const username = interaction.member.user.username;
-
-        if (interaction.data.name === 'ping') {
-          return new Response(JSON.stringify({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: 'Pong! 🏓' } }), { headers: { 'Content-Type': 'application/json' } });
-        }
-
         if (interaction.data.name === 'sheet') {
           ctx.waitUntil((async () => {
             const player = await env.DB.prepare('SELECT * FROM players WHERE id = ?').bind(userId).first();
             let content = "You haven't created a character yet. Use `/begin` to start.";
-            if (player) {
-              content = `**${player.name}**\n*${player.appearance}*\n\n**Level ${player.level}** | XP: ${player.xp}\n**Background:** ${player.background}\n**Blood Type:** ${player.blood_type}\n\n**Stats:**\n${player.stats}`;
+            if (player && player.level > 0) {
+              content = `**${player.name}**\n*${player.appearance}*\n\n**Level ${player.level}** | XP: ${player.xp}\n**Trait:** ${player.traits}\n**Background:** ${player.background}\n**Blood Type:** ${player.blood_type}\n\n**Stats:**\n${player.stats}`;
             }
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -70,8 +63,8 @@ export default {
 
         if (interaction.data.name === 'begin') {
           ctx.waitUntil((async () => {
-            const player = await env.DB.prepare('SELECT id FROM players WHERE id = ?').bind(userId).first();
-            if (player) {
+            const player = await env.DB.prepare('SELECT level FROM players WHERE id = ?').bind(userId).first();
+            if (player && player.level > 0) {
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: "You already have a character. Use `/sheet` to view it." })
@@ -92,7 +85,9 @@ export default {
 
       // --- BUTTONS ---
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
-        if (interaction.data.custom_id === 'start_create') {
+        const cid = interaction.data.custom_id;
+
+        if (cid === 'start_create') {
           return new Response(JSON.stringify({
             type: InteractionResponseType.MODAL,
             data: {
@@ -106,79 +101,105 @@ export default {
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // Step 2: Choose traits (buttons for simplicity in testing)
-        if (interaction.data.custom_id === 'trait_insomnia') {
-          ctx.waitUntil(updatePlayer(ctx, env, interaction, 'traits', 'Insomnia'));
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        // Handle Trait Selection (Step 2 -> Step 3)
+        if (cid.startsWith('trait_')) {
+          const trait = cid.replace('trait_', '');
+          ctx.waitUntil(env.DB.prepare(`UPDATE players SET traits = ? WHERE id = ?`).bind(trait, userId).run());
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.UPDATE_MESSAGE,
+            data: {
+              content: `You chose **${trait}**.\n\n**Step 3: What is your background?**`,
+              components: [{ type: 1, components: [
+                { type: 2, style: 1, label: "Student", custom_id: "bg_student" },
+                { type: 2, style: 1, label: "Worker", custom_id: "bg_worker" },
+                { type: 2, style: 1, label: "Drifter", custom_id: "bg_drifter" }
+              ]}]
+            }
+          }), { headers: { 'Content-Type': 'application/json' } });
         }
-        if (interaction.data.custom_id === 'trait_nightowl') {
-          ctx.waitUntil(updatePlayer(ctx, env, interaction, 'traits', 'Night Owl'));
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+
+        // Handle Background (Step 3 -> Step 4)
+        if (cid.startsWith('bg_')) {
+          const bg = cid.replace('bg_', '');
+          ctx.waitUntil(env.DB.prepare(`UPDATE players SET background = ? WHERE id = ?`).bind(bg, userId).run());
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.UPDATE_MESSAGE,
+            data: {
+              content: `You chose **${bg}**.\n\n**Step 4: What is your blood type?**`,
+              components: [{ type: 1, components: [
+                { type: 2, style: 1, label: "Type A", custom_id: "blood_A" },
+                { type: 2, style: 1, label: "Type B", custom_id: "blood_B" },
+                { type: 2, style: 1, label: "Type AB", custom_id: "blood_AB" },
+                { type: 2, style: 1, label: "Type O", custom_id: "blood_O" }
+              ]}]
+            }
+          }), { headers: { 'Content-Type': 'application/json' } });
         }
-        if (interaction.data.custom_id === 'trait_mysterious') {
-          ctx.waitUntil(updatePlayer(ctx, env, interaction, 'traits', 'Mysterious'));
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+
+        // Handle Blood Type (Step 4 -> Step 5)
+        if (cid.startsWith('blood_')) {
+          const blood = cid.replace('blood_', '');
+          ctx.waitUntil(env.DB.prepare(`UPDATE players SET blood_type = ? WHERE id = ?`).bind(blood, userId).run());
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.UPDATE_MESSAGE,
+            data: {
+              content: `Blood Type **${blood}**.\n\n**Step 5: Choose your starting stat focus.**`,
+              components: [{ type: 1, components: [
+                { type: 2, style: 1, label: "Balanced", custom_id: "stats_balanced" },
+                { type: 2, style: 1, label: "Charming", custom_id: "stats_charm" },
+                { type: 2, style: 1, label: "Mysterious", custom_id: "stats_mystery" }
+              ]}]
+            }
+          }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        // Handle Stats & Finish (Step 5 -> Done)
+        if (cid.startsWith('stats_')) {
+          const statType = cid.replace('stats_', '');
+          let statsStr = "";
+          if (statType === 'balanced') statsStr = "Charm 3, Mystery 3, Nerve 3, Empathy 3, Night-sense 1";
+          if (statType === 'charm') statsStr = "Charm 5, Mystery 2, Nerve 2, Empathy 3, Night-sense 1";
+          if (statType === 'mystery') statsStr = "Charm 1, Mystery 5, Nerve 3, Empathy 2, Night-sense 2";
+
+          ctx.waitUntil(env.DB.prepare(`UPDATE players SET stats = ?, level = 1 WHERE id = ?`).bind(statsStr, userId).run());
+          
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.UPDATE_MESSAGE,
+            data: {
+              content: `**Character Creation Complete!**\n\nUse \`/sheet\` to view your profile. The night awaits.`,
+              components: []
+            }
+          }), { headers: { 'Content-Type': 'application/json' } });
         }
       }
 
       // --- MODALS ---
       if (interaction.type === InteractionType.MODAL_SUBMIT) {
-        const userId = interaction.member.user.id;
-        
         if (interaction.data.custom_id === 'modal_step1') {
           const name = interaction.data.components[0].components[0].value;
           const appearance = interaction.data.components[1].components[0].value;
 
           ctx.waitUntil((async () => {
-            // Save temporary data (we use level 0 to indicate not finished)
             await env.DB.prepare(`
               INSERT INTO players (id, name, appearance, level) VALUES (?, ?, ?, 0)
               ON CONFLICT(id) DO UPDATE SET name = ?, appearance = ?
             `).bind(userId, name, appearance, name, appearance).run();
-
-            // Send Step 2
-            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                content: "**Step 2: What is your defining trait?**",
-                components: [{ 
-                  type: 1, 
-                  components: [
-                    { type: 2, style: 1, label: "Insomnia", custom_id: "trait_insomnia" },
-                    { type: 2, style: 1, label: "Night Owl", custom_id: "trait_nightowl" },
-                    { type: 2, style: 1, label: "Mysterious", custom_id: "trait_mysterious" }
-                  ] 
-                }]
-              })
-            });
           })());
 
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.UPDATE_MESSAGE,
+            data: {
+              content: `Name: **${name}**\nAppearance: *${appearance}*\n\n**Step 2: What is your defining trait?**`,
+              components: [{ type: 1, components: [
+                { type: 2, style: 1, label: "Insomnia", custom_id: "trait_Insomnia" },
+                { type: 2, style: 1, label: "Night Owl", custom_id: "trait_NightOwl" },
+                { type: 2, style: 1, label: "Mysterious", custom_id: "trait_Mysterious" }
+              ]}]
+            }
+          }), { headers: { 'Content-Type': 'application/json' } });
         }
       }
     }
     return new Response('Not found', { status: 404 });
   },
 };
-
-async function updatePlayer(ctx: ExecutionContext, env: Env, interaction: any, field: string, value: string) {
-  const userId = interaction.member.user.id;
-  // Update the field
-  await env.DB.prepare(`UPDATE players SET ${field} = ? WHERE id = ?`).bind(value, userId).run();
-  
-  // Send the next step (Background)
-  await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      content: `You chose **${value}**.\n\n**Step 3: What is your background?**`,
-      components: [{ 
-        type: 1, 
-        components: [
-          { type: 2, style: 1, label: "Student", custom_id: "bg_student" },
-          { type: 2, style: 1, label: "Worker", custom_id: "bg_worker" },
-          { type: 2, style: 1, label: "Drifter", custom_id: "bg_drifter" }
-        ] 
-      }]
-    })
-  });
-}
