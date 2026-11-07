@@ -24,7 +24,9 @@ export default {
           { name: 'begin', description: 'Start your character creation', type: 1 },
           { name: 'sheet', description: 'View your character sheet', type: 1 },
           { name: 'explore', description: 'Explore the city', type: 1 },
-          { name: 'progress', description: 'Check your XP and level', type: 1 }
+          { name: 'progress', description: 'Check your XP and level', type: 1 },
+          { name: 'cases', description: 'View your active cases', type: 1 },
+          { name: 'notebook', description: 'View your collected clues', type: 1 }
         ])
       });
       return new Response(`Registration response: ${await response.text()}`, { status: 200 });
@@ -49,6 +51,54 @@ export default {
       // --- SLASH COMMANDS ---
       if (interaction.type === InteractionType.APPLICATION_COMMAND) {
         
+        if (interaction.data.name === 'cases') {
+          ctx.waitUntil((async () => {
+            const quests = await env.DB.prepare('SELECT * FROM quests_progress WHERE player_id = ? AND status = "active"').bind(userId).all();
+            
+            let content = "**Your Active Cases**\n\n";
+            if (quests.results.length === 0) {
+              content += "You have no active cases. Explore the city to find clues.";
+            } else {
+              quests.results.forEach((q: any) => {
+                content += `**Case:** ${q.quest_id.replace(/_/g, ' ').toUpperCase()}\n`;
+              });
+            }
+
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
+            });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (interaction.data.name === 'notebook') {
+          ctx.waitUntil((async () => {
+            const quests = await env.DB.prepare('SELECT * FROM quests_progress WHERE player_id = ?').bind(userId).all();
+            
+            let content = "**Your Notebook**\n\n";
+            let hasClues = false;
+            
+            quests.results.forEach((q: any) => {
+              if (q.clues) {
+                hasClues = true;
+                content += `**Case:** ${q.quest_id.replace(/_/g, ' ').toUpperCase()}\n`;
+                const cluesArr = JSON.parse(q.clues);
+                cluesArr.forEach((c: string) => {
+                  content += `- ${c}\n`;
+                });
+                content += "\n";
+              }
+            });
+
+            if (!hasClues) content += "Your notebook is empty.";
+
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
+            });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
         if (interaction.data.name === 'progress') {
           ctx.waitUntil((async () => {
             try {
@@ -231,7 +281,10 @@ export default {
             }
 
             const buttons = [];
-            if (location === 'rooftop') buttons.push({ type: 2, style: 1, label: "Talk to Nazuna", custom_id: "talk_nazuna" });
+            if (location === 'rooftop') {
+              buttons.push({ type: 2, style: 1, label: "Talk to Nazuna", custom_id: "talk_nazuna" });
+              buttons.push({ type: 2, style: 3, label: "Search for Clues", custom_id: "search_clue" });
+            }
             buttons.push({ type: 2, style: 4, label: "Leave", custom_id: "leave_scene" });
 
             await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
@@ -245,6 +298,77 @@ export default {
 
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
               method: 'DELETE'
+            });
+          })());
+
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (cid === 'search_clue') {
+          const threadId = interaction.channel_id;
+          
+          ctx.waitUntil((async () => {
+            const questId = "rooftop_mystery";
+            const allClues = [
+              "A torn receipt from a 24-hour konbini.",
+              "A faint smell of iron near the ledge.",
+              "Scuff marks near the roof door."
+            ];
+
+            let progress: any = await env.DB.prepare('SELECT * FROM quests_progress WHERE player_id = ? AND quest_id = ?').bind(userId, questId).first();
+            
+            let collectedClues = [];
+            if (progress && progress.clues) {
+              collectedClues = JSON.parse(progress.clues);
+            }
+
+            // Find a clue they don't have yet
+            const availableClues = allClues.filter(c => !collectedClues.includes(c));
+
+            if (availableClues.length === 0) {
+              await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: "You search the area, but find nothing new. You've found all the clues here." })
+              });
+              return;
+            }
+
+            const newClue = availableClues[0];
+            collectedClues.push(newClue);
+
+            if (progress) {
+              await env.DB.prepare('UPDATE quests_progress SET clues = ? WHERE player_id = ? AND quest_id = ?').bind(JSON.stringify(collectedClues), userId, questId).run();
+            } else {
+              await env.DB.prepare('INSERT INTO quests_progress (player_id, quest_id, clues) VALUES (?, ?, ?)').bind(userId, questId, JSON.stringify(collectedClues)).run();
+            }
+
+            // Grant 100 XP
+            const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
+            if (player) {
+              const currentLvl = Number(player.level) || 1;
+              const currentXp = Number(player.xp) || 0;
+              const newXp = currentXp + 100;
+              const xpNeeded = currentLvl * 100;
+              
+              if (newXp >= xpNeeded) {
+                await env.DB.prepare(`UPDATE players SET level = level + 1, xp = xp - ? WHERE id = ?`).bind(xpNeeded, userId).run();
+                await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ content: `✨ **Level Up!** You are now Level ${currentLvl + 1}.` })
+                });
+              } else {
+                await env.DB.prepare(`UPDATE players SET xp = xp + 100 WHERE id = ?`).bind(userId).run();
+              }
+            }
+
+            await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                content: `🔍 **You found a clue!**\n> *${newClue}*\n\n*Check your clues with \`/notebook\`.* (100 XP)`
+              })
             });
           })());
 
@@ -389,7 +513,6 @@ export default {
     
     let message = "";
     
-    // Cloudflare cron triggers are set to run at 09:00 UTC (18:00 Tokyo) and 21:00 UTC (06:00 Tokyo)
     if (tokyoHour === 18) {
       message = "🌙 **The night begins.**\nThe city exhales. Somewhere, a door opens.";
     } else if (tokyoHour === 6) {
