@@ -224,6 +224,30 @@ export default {
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
 
+        // Sire Selection
+        if (cid === 'sire_nazuna' || cid === 'sire_wildcard') {
+          ctx.waitUntil((async () => {
+            let sireName = "Nazuna Nanakusa";
+            let flavorText = "";
+
+            if (cid === 'sire_wildcard') {
+              const wildcards = ["Kiku Hoshimi", "Seri Kikyou", "Midori Kohakobe"];
+              sireName = wildcards[Math.floor(Math.random() * wildcards.length)];
+              flavorText = `A figure steps out of the shadows. You don't know them, but they seem to know you. "${sireName}," they say. "Remember it."`;
+            } else {
+              flavorText = `Nazuna smiles, her fangs catching the moonlight. "Alright, Yousef. Let's see if you can handle the night."`;
+            }
+
+            await env.DB.prepare(`UPDATE players SET track = 'Vampire Offspring', stats = stats || ' | Sire: ' || ? WHERE id = ?`).bind(sireName, userId).run();
+
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: `🌙 **You are now an Offspring.**\n\nYour sire is **${sireName}**.\n\n${flavorText}`, components: [] })
+            });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
         // Character Creation Buttons
         if (cid === 'start_create') {
           return new Response(JSON.stringify({
@@ -457,10 +481,9 @@ export default {
           
           ctx.waitUntil((async () => {
             try {
-              const player: any = await env.DB.prepare('SELECT name, xp, level FROM players WHERE id = ?').bind(userId).first();
+              const player: any = await env.DB.prepare('SELECT name, xp, level, track FROM players WHERE id = ?').bind(userId).first();
               const playerName = player ? player.name : "a stranger";
 
-              // AI Reply
               const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
@@ -478,7 +501,6 @@ export default {
               const aiData: any = await aiRes.json();
               const reply = aiData.choices[0].message.content;
 
-              // Send Webhook
               const threadInfoRes = await fetch(`https://discord.com/api/v10/channels/${threadId}`, {
                 headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
               });
@@ -500,7 +522,6 @@ export default {
                 body: JSON.stringify({ content: reply, username: "Nazuna Nanakusa" })
               });
 
-              // Grant XP & Bond
               if (player) {
                 const currentLvl = Number(player.level) || 1;
                 const currentXp = Number(player.xp) || 0;
@@ -515,8 +536,7 @@ export default {
                     body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${currentLvl + 1}.` })
                   });
 
-                  // Check for Level 5 Sire Gate
-                  if (currentLvl + 1 === 5) {
+                  if (currentLvl + 1 === 5 && player.track !== 'Vampire Offspring') {
                     await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
                       method: 'POST',
                       headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
@@ -534,7 +554,6 @@ export default {
                   await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
                 }
 
-                // Add Bond Point
                 const bond = await env.DB.prepare('SELECT points FROM npc_bonds WHERE player_id = ? AND npc_id = ?').bind(userId, 'nazuna').first();
                 if (bond) {
                   await env.DB.prepare('UPDATE npc_bonds SET points = points + 1 WHERE player_id = ? AND npc_id = ?').bind(userId, 'nazuna').run();
