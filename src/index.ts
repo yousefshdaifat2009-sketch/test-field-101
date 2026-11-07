@@ -60,7 +60,6 @@ export default {
       // --- SLASH COMMANDS ---
       if (interaction.type === InteractionType.APPLICATION_COMMAND) {
         
-        // --- ADMIN COMMANDS ---
         if (interaction.data.name === 'admin') {
           if (userId !== env.OWNER_DISCORD_ID) {
             return new Response(JSON.stringify({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: "❌ You are not the owner.", flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
@@ -110,7 +109,6 @@ export default {
           }
         }
 
-        // --- PLAYER COMMANDS ---
         if (interaction.data.name === 'bonds') {
           ctx.waitUntil((async () => {
             const bonds = await env.DB.prepare('SELECT * FROM npc_bonds WHERE player_id = ?').bind(userId).all();
@@ -269,7 +267,6 @@ export default {
           }
           locations.push({ type: 2, style: 1, label: "Your Apartment", custom_id: "go_apartment" });
 
-          // Chunk buttons in groups of 5
           const components = [];
           for (let i = 0; i < locations.length; i += 5) {
             components.push({ type: 1, components: locations.slice(i, i + 5) });
@@ -311,7 +308,6 @@ export default {
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // Character Creation Buttons
         if (cid === 'start_create') {
           return new Response(JSON.stringify({
             type: InteractionResponseType.MODAL,
@@ -358,7 +354,6 @@ export default {
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- EXPLORE BUTTONS ---
         if (cid.startsWith('go_')) {
           const location = cid.replace('go_', '');
           const locName = location.charAt(0).toUpperCase() + location.slice(1);
@@ -377,7 +372,6 @@ export default {
             const isNight = tokyoHour >= 18 || tokyoHour < 6;
             const timeStr = isNight ? "night" : "day";
 
-            // Check AI Usage Limit
             const today = new Date().toISOString().split('T')[0];
             const usage: any = await env.DB.prepare('SELECT count FROM ai_usage WHERE date = ?').bind(today).first();
             let desc = "";
@@ -404,7 +398,6 @@ export default {
               }
             }
 
-            // Build Buttons based on location & time
             const buttons = [];
             if (location === 'rooftop' && isNight) buttons.push({ type: 2, style: 1, label: "Talk", custom_id: "talk_menu" });
             if (location === 'school' && !isNight) buttons.push({ type: 2, style: 1, label: "Talk", custom_id: "talk_menu" });
@@ -424,7 +417,6 @@ export default {
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- TALK MENU ---
         if (cid === 'talk_menu') {
           const threadId = interaction.channel_id;
           ctx.waitUntil((async () => {
@@ -450,7 +442,6 @@ export default {
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- INDIVIDUAL TALK BUTTONS ---
         if (cid === 'talk_nazuna') {
           return new Response(JSON.stringify({ type: InteractionResponseType.MODAL, data: { custom_id: 'modal_nazuna', title: 'Talk to Nazuna', components: [{ type: 1, components: [{ type: 4, custom_id: 'message', label: 'What do you say?', style: 2, min_length: 1, max_length: 500, required: true }] }] } }), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -464,13 +455,30 @@ export default {
           return new Response(JSON.stringify({ type: InteractionResponseType.MODAL, data: { custom_id: 'modal_anko', title: 'Talk to Anko', components: [{ type: 1, components: [{ type: 4, custom_id: 'message', label: 'What do you say?', style: 2, min_length: 1, max_length: 500, required: true }] }] } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- INVESTIGATE (INFINITE QUESTS) ---
+        // --- INVESTIGATE (INFINITE QUESTS WITH COOLDOWN) ---
         if (cid === 'investigate') {
           const threadId = interaction.channel_id;
           ctx.waitUntil((async () => {
             const scene: any = await env.DB.prepare('SELECT location FROM scenes WHERE id = ?').bind(threadId).first();
             const location = scene ? scene.location : "city";
             
+            // 1. Check Cooldown
+            const lastInvestigation: any = await env.DB.prepare('SELECT created_at FROM infinite_quests WHERE player_id = ? AND location = ? ORDER BY created_at DESC LIMIT 1').bind(userId, location).first();
+            
+            if (lastInvestigation) {
+              const lastTime = new Date(lastInvestigation.created_at + "Z").getTime(); // SQLite UTC
+              const now = new Date().getTime();
+              const hoursDiff = (now - lastTime) / (1000 * 60 * 60);
+              
+              if (hoursDiff < 4) {
+                 await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { 
+                   method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, 
+                   body: JSON.stringify({ content: "You have already searched this area recently. The night is quiet here for now. *(4-hour cooldown)*" }) 
+                 });
+                 return;
+              }
+            }
+
             const today = new Date().toISOString().split('T')[0];
             const usage: any = await env.DB.prepare('SELECT count FROM ai_usage WHERE date = ?').bind(today).first();
             if (usage && usage.count >= 900) {
@@ -490,7 +498,6 @@ export default {
               });
               const aiData: any = await aiRes.json();
               let rawText = aiData.choices[0].message.content.trim();
-              // Clean up potential markdown
               if (rawText.startsWith('\`\`\`json')) rawText = rawText.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
               
               const clues = JSON.parse(rawText);
@@ -503,7 +510,6 @@ export default {
                 body: JSON.stringify({ content: `🔍 **You investigate the ${location}.**\n> - ${clues.clue1}\n> - ${clues.clue2}\n> - ${clues.clue3}\n\n*Check your clues with \`/notebook\`.* (100 XP)` })
               });
 
-              // Award XP
               await env.DB.prepare(`UPDATE players SET xp = xp + 100 WHERE id = ?`).bind(userId).run();
               const levelResult = await processLevelUp(env, userId);
               if (levelResult) {
@@ -540,7 +546,6 @@ export default {
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- NPC DIALOGUE MODALS ---
         const modalId = interaction.data.custom_id;
         if (['modal_nazuna', 'modal_kou', 'modal_akira', 'modal_anko'].includes(modalId)) {
           const userMessage = interaction.data.components[0].components[0].value;
@@ -561,7 +566,7 @@ export default {
               let npcName = "";
               let prompt = "";
               let npcId = "";
-              let avatarUrl = "https://i.imgur.com/your_nazuna_image.png"; // Placeholder
+              let avatarUrl = "https://i.imgur.com/your_nazuna_image.png";
 
               if (modalId === 'modal_nazuna') {
                 npcId = "nazuna"; npcName = "Nazuna Nanakusa";
@@ -577,7 +582,6 @@ export default {
                 prompt = `You are Anko Uguisu from Call of the Night. You are a cynical vampire-hunting detective. You smoke, wear a trench coat, and are deeply traumatized. You are talking to ${playerName}. Keep responses to 1-3 sentences.`;
               }
 
-              // Track met NPCs
               await env.DB.prepare(`INSERT OR IGNORE INTO player_npcs_met (player_id, npc_id) VALUES (?, ?)`).bind(userId, npcId).run();
 
               const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -631,7 +635,6 @@ export default {
                   await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${levelResult.level}.` }) });
 
                   if (levelResult.level === 5 && player.track !== 'Vampire Offspring') {
-                    // Check Level 5 Gate
                     const metCount: any = await env.DB.prepare('SELECT COUNT(*) as count FROM player_npcs_met WHERE player_id = ?').bind(userId).first();
                     const clueCount: any = await env.DB.prepare('SELECT COUNT(*) as count FROM quests_progress WHERE player_id = ?').bind(userId).first();
                     const infClueCount: any = await env.DB.prepare('SELECT COUNT(*) as count FROM infinite_quests WHERE player_id = ?').bind(userId).first();
