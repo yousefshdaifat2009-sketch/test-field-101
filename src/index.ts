@@ -160,7 +160,6 @@ export default {
           const locName = location.charAt(0).toUpperCase() + location.slice(1);
           
           ctx.waitUntil((async () => {
-            // 1. Create a thread
             const threadRes = await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/threads`, {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
@@ -169,10 +168,8 @@ export default {
             const threadData: any = await threadRes.json();
             const threadId = threadData.id;
 
-            // 2. Save scene to DB
             await env.DB.prepare(`INSERT INTO scenes (id, channel_id, location) VALUES (?, ?, ?)`).bind(threadId, interaction.channel_id, location).run();
 
-            // 3. Ask AI to describe the scene
             const tokyoHour = (new Date().getUTCHours() + 9) % 24;
             const isNight = tokyoHour >= 18 || tokyoHour < 6;
             const timeStr = isNight ? "night" : "day";
@@ -196,7 +193,6 @@ export default {
               desc = `**Error generating scene:** ${error.message}`;
             }
 
-            // 4. Send message to the thread with Actions
             const buttons = [];
             if (location === 'rooftop') buttons.push({ type: 2, style: 1, label: "Talk to Nazuna", custom_id: "talk_nazuna" });
             buttons.push({ type: 2, style: 4, label: "Leave", custom_id: "leave_scene" });
@@ -210,7 +206,6 @@ export default {
               })
             });
 
-            // 5. Delete the ephemeral message
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
               method: 'DELETE'
             });
@@ -275,7 +270,6 @@ export default {
           
           ctx.waitUntil((async () => {
             try {
-              // Fetch player info to make the AI know who they are talking to
               const player: any = await env.DB.prepare('SELECT name FROM players WHERE id = ?').bind(userId).first();
               const playerName = player ? player.name : "a stranger";
 
@@ -291,29 +285,42 @@ export default {
                   max_tokens: 1000
                 })
               });
+              
+              if (!aiRes.ok) throw new Error(`Groq API Error: ${await aiRes.text()}`);
               const aiData: any = await aiRes.json();
               const reply = aiData.choices[0].message.content;
 
-              // Send Nazuna's reply as a webhook to look like her
               const webhookRes = await fetch(`https://discord.com/api/v10/channels/${threadId}/webhooks`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: "Nazuna" })
               });
+              
+              if (!webhookRes.ok) throw new Error(`Webhook creation failed. Make sure the bot has 'Manage Webhooks' permission. Error: ${await webhookRes.text()}`);
+              
               const webhookData: any = await webhookRes.json();
               
-              await fetch(`https://discord.com/api/webhooks/${webhookData.id}/${webhookData.token}`, {
+              const sendRes = await fetch(`https://discord.com/api/webhooks/${webhookData.id}/${webhookData.token}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                   content: reply,
-                  username: "Nazuna Nanakusa",
-                  avatar_url: "https://i.imgur.com/your_nazuna_image.png" // Placeholder
+                  username: "Nazuna Nanakusa"
                 })
               });
 
-            } catch (error) {
-              console.error(error);
+              if (!sendRes.ok) throw new Error(`Failed to send webhook message: ${await sendRes.text()}`);
+
+              // Delete the thinking message
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+                method: 'DELETE'
+              });
+
+            } catch (error: any) {
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: `**Error:** ${error.message}` })
+              });
             }
           })());
 
