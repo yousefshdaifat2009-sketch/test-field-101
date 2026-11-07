@@ -177,17 +177,31 @@ export default {
             const isNight = tokyoHour >= 18 || tokyoHour < 6;
             const timeStr = isNight ? "night" : "day";
 
-            const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-              method: 'POST',
-              headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                model: 'openai/gpt-oss-20b',
-                messages: [{ role: 'system', content: `You are a narrator for Call of the Night. Write a 2-sentence atmospheric description of a ${locName} at ${timeStr}. Be melancholic and brief.` }],
-                max_tokens: 80
-              })
-            });
-            const aiData: any = await aiRes.json();
-            const desc = aiData.choices[0].message.content;
+            let desc = "";
+            try {
+              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  model: 'openai/gpt-oss-20b',
+                  messages: [{ role: 'system', content: `You are a narrator for Call of the Night. Write a 2-sentence atmospheric description of a ${locName} at ${timeStr}. Be melancholic and brief.` }],
+                  max_tokens: 80
+                })
+              });
+
+              if (!aiRes.ok) {
+                throw new Error(`Groq API Error: ${await aiRes.text()}`);
+              }
+
+              const aiData: any = await aiRes.json();
+              desc = aiData.choices[0].message.content;
+              
+              if (!desc || desc.trim() === "") {
+                throw new Error(`Groq returned an empty string. Response: ${JSON.stringify(aiData)}`);
+              }
+            } catch (error: any) {
+              desc = `**Error generating scene:** ${error.message}`;
+            }
 
             // 4. Send message to the thread
             await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
@@ -211,13 +225,11 @@ export default {
         // --- LEAVE SCENE ---
         if (cid === 'leave_scene') {
           ctx.waitUntil((async () => {
-             // Archive the thread
              await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, {
               method: 'PATCH',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ archived: true })
             });
-             // Mark scene closed in DB
              await env.DB.prepare(`UPDATE scenes SET status = 'closed' WHERE id = ?`).bind(interaction.channel_id).run();
           })());
           return new Response(JSON.stringify({
