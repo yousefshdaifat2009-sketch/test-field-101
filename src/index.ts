@@ -22,7 +22,11 @@ export default {
           { name: 'ping', description: 'Replies with Pong!', type: 1 },
           { name: 'begin', description: 'Start your character creation', type: 1 },
           { name: 'sheet', description: 'View your character sheet', type: 1 },
-          { name: 'explore', description: 'Explore the city', type: 1 }
+          { name: 'explore', description: 'Explore the city', type: 1 },
+          { 
+            name: 'test-ai', description: 'Test the AI connection', type: 1,
+            options: [{ name: 'prompt', description: 'What to say to the AI', type: 3, required: true }]
+          }
         ])
       });
       return new Response(`Registration response: ${await response.text()}`, { status: 200 });
@@ -101,13 +105,39 @@ export default {
             }
           }), { headers: { 'Content-Type': 'application/json' } });
         }
+
+        if (interaction.data.name === 'test-ai') {
+          const prompt = interaction.data.options[0].value;
+          ctx.waitUntil((async () => {
+            try {
+              const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  model: 'openai/gpt-oss-20b',
+                  messages: [{ role: 'system', content: 'You are a narrator for the anime Call of the Night. Be brief, melancholic, and mysterious.' }, { role: 'user', content: prompt }],
+                  max_tokens: 1000
+                })
+              });
+              const groqData: any = await groqRes.json();
+              const aiReply = groqData.choices[0].message.content;
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**AI:** ${aiReply}` })
+              });
+            } catch (error: any) {
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**Error:** ${error.message}` })
+              });
+            }
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE }), { headers: { 'Content-Type': 'application/json' } });
+        }
       }
 
       // --- BUTTONS ---
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
 
-        // Character Creation Buttons
         if (cid === 'start_create') {
           return new Response(JSON.stringify({
             type: InteractionResponseType.MODAL,
@@ -160,7 +190,6 @@ export default {
           const locName = location.charAt(0).toUpperCase() + location.slice(1);
           
           ctx.waitUntil((async () => {
-            // 1. Create a thread
             const threadRes = await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/threads`, {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
@@ -169,10 +198,8 @@ export default {
             const threadData: any = await threadRes.json();
             const threadId = threadData.id;
 
-            // 2. Save scene to DB
             await env.DB.prepare(`INSERT INTO scenes (id, channel_id, location) VALUES (?, ?, ?)`).bind(threadId, interaction.channel_id, location).run();
 
-            // 3. Ask AI to describe the scene
             const tokyoHour = (new Date().getUTCHours() + 9) % 24;
             const isNight = tokyoHour >= 18 || tokyoHour < 6;
             const timeStr = isNight ? "night" : "day";
@@ -185,7 +212,7 @@ export default {
                 body: JSON.stringify({
                   model: 'openai/gpt-oss-20b',
                   messages: [{ role: 'system', content: `You are a narrator for Call of the Night. Write a 2-sentence atmospheric description of a ${locName} at ${timeStr}. Be melancholic and brief.` }],
-                  max_tokens: 300 // Increased from 80 to allow reasoning + output
+                  max_tokens: 1000
                 })
               });
 
@@ -203,7 +230,6 @@ export default {
               desc = `**Error generating scene:** ${error.message}`;
             }
 
-            // 4. Send message to the thread
             await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
@@ -213,7 +239,6 @@ export default {
               })
             });
 
-            // 5. Delete the ephemeral message
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
               method: 'DELETE'
             });
