@@ -84,8 +84,11 @@ export default {
             const amount = interaction.data.options[0].options[1].value;
             ctx.waitUntil((async () => {
               await env.DB.prepare('UPDATE players SET xp = xp + ? WHERE id = ?').bind(amount, targetUser).run();
+              const levelResult = await processLevelUp(env, targetUser);
+              let reply = `✅ Granted **${amount} XP** to <@${targetUser}>.`;
+              if (levelResult) reply += `\n✨ **Level Up!** They are now Level ${levelResult.level}.`;
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `✅ Granted **${amount} XP** to <@${targetUser}>.` })
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: reply })
               });
             })());
             return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
@@ -340,6 +343,7 @@ export default {
             // Check AI Usage Limit before calling Groq
             const today = new Date().toISOString().split('T')[0];
             const usage: any = await env.DB.prepare('SELECT count FROM ai_usage WHERE date = ?').bind(today).first();
+            let desc = "";
             if (usage && usage.count >= 900) {
               desc = `**The night goes quiet.** (Daily AI limit reached. Come back tomorrow.)`;
             } else {
@@ -404,26 +408,20 @@ export default {
             if (progress) await env.DB.prepare('UPDATE quests_progress SET clues = ? WHERE player_id = ? AND quest_id = ?').bind(JSON.stringify(collectedClues), userId, questId).run();
             else await env.DB.prepare('INSERT INTO quests_progress (player_id, quest_id, clues) VALUES (?, ?, ?)').bind(userId, questId, JSON.stringify(collectedClues)).run();
 
-            const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
-            if (player) {
-              const currentLvl = Number(player.level) || 1;
-              const currentXp = Number(player.xp) || 0;
-              const newXp = currentXp + 100;
-              const xpNeeded = currentLvl * 100;
-              
-              if (newXp >= xpNeeded) {
-                const remainingXp = newXp - xpNeeded;
-                await env.DB.prepare(`UPDATE players SET level = level + 1, xp = ? WHERE id = ?`).bind(remainingXp, userId).run();
-                await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `✨ **Level Up!** You are now Level ${currentLvl + 1}.` }) });
-              } else {
-                await env.DB.prepare(`UPDATE players SET xp = xp + 100 WHERE id = ?`).bind(userId).run();
-              }
-            }
+            await env.DB.prepare(`UPDATE players SET xp = xp + 100 WHERE id = ?`).bind(userId).run();
+            const levelResult = await processLevelUp(env, userId);
 
             await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
               method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ content: `🔍 **You found a clue!**\n> *${newClue}*\n\n*Check your clues with \`/notebook\`.* (100 XP)` })
             });
+
+            if (levelResult) {
+               await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
+                method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: `✨ **Level Up!** You are now Level ${levelResult.level}.` })
+              });
+            }
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -523,17 +521,13 @@ export default {
               });
 
               if (player) {
-                const currentLvl = Number(player.level) || 1;
-                const currentXp = Number(player.xp) || 0;
-                const newXp = currentXp + 50;
-                const xpNeeded = currentLvl * 100;
+                await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
+                const levelResult = await processLevelUp(env, userId);
                 
-                if (newXp >= xpNeeded) {
-                  const remainingXp = newXp - xpNeeded;
-                  await env.DB.prepare(`UPDATE players SET level = level + 1, xp = ? WHERE id = ?`).bind(remainingXp, userId).run();
-                  await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${currentLvl + 1}.` }) });
+                if (levelResult) {
+                  await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${levelResult.level}.` }) });
 
-                  if (currentLvl + 1 === 5 && player.track !== 'Vampire Offspring') {
+                  if (levelResult.level === 5 && player.track !== 'Vampire Offspring') {
                     await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
                       method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                       body: JSON.stringify({ 
@@ -542,8 +536,6 @@ export default {
                       })
                     });
                   }
-                } else {
-                  await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
                 }
 
                 const bond = await env.DB.prepare('SELECT points FROM npc_bonds WHERE player_id = ? AND npc_id = ?').bind(userId, 'nazuna').first();
@@ -572,7 +564,6 @@ export default {
     const tokyoHour = (utcHour + 9) % 24;
     
     let message = "";
-    
     if (tokyoHour === 18) message = "🌙 **The night begins.**\nThe city exhales. Somewhere, a door opens.";
     else if (tokyoHour === 6) message = "☀️ **The sun rises.**\nThe night lets go — for now.";
 
@@ -583,3 +574,26 @@ export default {
     }
   }
 };
+
+// --- THE LEVEL UP ENGINE ---
+async function processLevelUp(env: Env, userId: string) {
+  const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
+  if (!player) return null;
+
+  let lvl = Number(player.level) || 1;
+  let xp = Number(player.xp) || 0;
+  let leveledUp = false;
+
+  // Keep leveling up as long as they have enough XP
+  while (xp >= (lvl * 100)) {
+    xp -= (lvl * 100);
+    lvl++;
+    leveledUp = true;
+  }
+
+  if (leveledUp) {
+    await env.DB.prepare('UPDATE players SET level = ?, xp = ? WHERE id = ?').bind(lvl, xp, userId).run();
+    return { level: lvl, xp: xp };
+  }
+  return null;
+}
