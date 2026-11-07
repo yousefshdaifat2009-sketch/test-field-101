@@ -76,7 +76,6 @@ export default {
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "Both players must have a character created." }) });
                return;
              }
-             // Cleanup old sessions
              await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
              
              await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
@@ -139,7 +138,6 @@ export default {
           if (subcommand === 'boss') {
             const targetUser = interaction.data.options[0].options[0].value;
             ctx.waitUntil((async () => {
-               // Cleanup old sessions
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
                
                const bossId = "rogue_vampire";
@@ -147,7 +145,7 @@ export default {
                await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
                  method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                  body: JSON.stringify({ 
-                   content: `🩸 **BOSS FIGHT: Rogue Vampire** 🩸\n<@${targetUser}> has cornered the Rogue Vampire! It has **150 HP**. You have **100 HP**.\n\nWhat will you do?`,
+                   content: `🩸 **BOSS FIGHT: Rogue Vampire** 🩸\n<@${targetUser}> has cornered the Rogue Vampire! It has **150 HP**. You have **100 HP**.\n\n👉 **<@${targetUser}>, it is your turn!**`,
                    components: [{ type: 1, components: [
                      { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                      { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
@@ -322,7 +320,7 @@ export default {
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
-                 content: `⚔️ **DUEL STARTED** ⚔️\n<@${p1Id}> (100 HP) vs <@${p2Id}> (100 HP)\n\n<@${p1Id}>, it is your turn!`,
+                 content: `⚔️ **DUEL STARTED** ⚔️\n<@${p1Id}> (100 HP) vs <@${p2Id}> (100 HP)\n\n👉 **<@${p1Id}>, it is your turn!**`,
                  components: [{ type: 1, components: [
                    { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                    { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
@@ -349,8 +347,9 @@ export default {
 
              let dmg = 0;
              let msg = "";
-             let p1Hp = session.p1_hp;
-             let p2Hp = session.p2_hp;
+             // Safety check for HP parsing
+             let p1Hp = session.p1_hp !== null ? Number(session.p1_hp) : 100;
+             let p2Hp = session.p2_hp !== null ? Number(session.p2_hp) : (session.p2_id === 'rogue_vampire' ? 150 : 100);
 
              if (cid === 'combat_attack') {
                dmg = Math.floor(Math.random() * 15) + 10;
@@ -390,13 +389,20 @@ export default {
 
              // Check Death
              if (p1Hp <= 0 || p2Hp <= 0) {
-               let winner = p1Hp > 0 ? "The Player" : (session.p2_id === 'rogue_vampire' ? "The Rogue Vampire" : "Player 2");
-               let loser = p1Hp <= 0 ? "The Player" : (session.p2_id === 'rogue_vampire' ? "The Rogue Vampire" : "Player 2");
+               let winner = "";
+               let loser = "";
+               if (p1Hp <= 0) {
+                 winner = session.p2_id === 'rogue_vampire' ? "The Rogue Vampire" : `<@${session.p2_id}>`;
+                 loser = `<@${session.p1_id}>`;
+               } else {
+                 winner = session.p1_id === session.p1_id ? `<@${session.p1_id}>` : `<@${session.p2_id}>`; // Player wins
+                 loser = session.p2_id === 'rogue_vampire' ? "The Rogue Vampire" : `<@${session.p2_id}>`;
+               }
                
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ content: `${msg}${extraMsg}\n\n💀 **${winner} wins!**\n${loser} wakes up in their apartment. (Hospital cooldown activated)`, components: [] })
+                 body: JSON.stringify({ content: `${msg}${extraMsg}\n\n💀 **${winner} wins!**\n${loser} ${loser === "The Rogue Vampire" ? "is defeated." : "wakes up in their apartment. (Hospital cooldown activated)"}`, components: [] })
                });
                return;
              }
@@ -407,7 +413,7 @@ export default {
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
-                 content: `${msg}${extraMsg}\n\n❤️ P1 HP: ${p1Hp} | P2 HP: ${p2Hp}\n\n<@${nextTurn}>, it is your turn!`,
+                 content: `${msg}${extraMsg}\n\n❤️ P1 HP: ${p1Hp} | P2 HP: ${p2Hp}\n\n👉 **<@${nextTurn}>, it is your turn!**`,
                  components: [{ type: 1, components: [
                    { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                    { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
