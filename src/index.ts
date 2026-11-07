@@ -62,7 +62,7 @@ export default {
             } else {
               bonds.results.forEach((b: any) => {
                 let tier = "Stranger";
-                const pts = Number(b.points);
+                const pts = Number(b.points) || 0;
                 if (pts >= 120) tier = "Best Friend 🟢";
                 else if (pts >= 60) tier = "Trusted 🔵";
                 else if (pts >= 30) tier = "Ally 🟣";
@@ -135,11 +135,11 @@ export default {
               
               if (player) {
                 const lvl = Number(player.level) || 1;
-                const xp = Number(player.xp) || 0;
+                const xp = Math.max(0, Number(player.xp) || 0); // Prevent negative XP
                 const xpNeeded = lvl * 100; 
                 
                 const barLength = 10;
-                const progress = Math.min(Math.floor((xp / xpNeeded) * barLength), barLength);
+                const progress = Math.max(0, Math.min(Math.floor((xp / xpNeeded) * barLength), barLength));
                 const bar = "▓".repeat(progress) + "░".repeat(barLength - progress);
                 content = `**Level ${lvl}**\nXP: ${xp} / ${xpNeeded}\n[${bar}]`;
               }
@@ -224,7 +224,7 @@ export default {
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
 
-        // Sire Selection
+        // --- SIRE SELECTION ---
         if (cid === 'sire_nazuna' || cid === 'sire_wildcard') {
           ctx.waitUntil((async () => {
             let sireName = "Nazuna Nanakusa";
@@ -235,10 +235,13 @@ export default {
               sireName = wildcards[Math.floor(Math.random() * wildcards.length)];
               flavorText = `A figure steps out of the shadows. You don't know them, but they seem to know you. "${sireName}," they say. "Remember it."`;
             } else {
-              flavorText = `Nazuna smiles, her fangs catching the moonlight. "Alright, Yousef. Let's see if you can handle the night."`;
+              flavorText = `Nazuna smiles, her fangs catching the moonlight. "Alright. Let's see if you can handle the night."`;
             }
 
-            await env.DB.prepare(`UPDATE players SET track = 'Vampire Offspring', stats = stats || ' | Sire: ' || ? WHERE id = ?`).bind(sireName, userId).run();
+            // Save the track
+            await env.DB.prepare(`UPDATE players SET track = 'Vampire Offspring' WHERE id = ?`).bind(userId).run();
+            // Append Sire to stats for now
+            await env.DB.prepare(`UPDATE players SET stats = stats || ' | Sire: ' || ? WHERE id = ?`).bind(sireName, userId).run();
 
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -397,7 +400,7 @@ export default {
             }
 
             // Grant 100 XP
-            const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
+            const player: any = await env.DB.prepare('SELECT level, xp, track FROM players WHERE id = ?').bind(userId).first();
             if (player) {
               const currentLvl = Number(player.level) || 1;
               const currentXp = Number(player.xp) || 0;
@@ -405,7 +408,8 @@ export default {
               const xpNeeded = currentLvl * 100;
               
               if (newXp >= xpNeeded) {
-                await env.DB.prepare(`UPDATE players SET level = level + 1, xp = xp - ? WHERE id = ?`).bind(xpNeeded, userId).run();
+                const remainingXp = newXp - xpNeeded;
+                await env.DB.prepare(`UPDATE players SET level = level + 1, xp = ? WHERE id = ?`).bind(remainingXp, userId).run();
                 await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
                   method: 'POST',
                   headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
@@ -529,7 +533,8 @@ export default {
                 const xpNeeded = currentLvl * 100;
                 
                 if (newXp >= xpNeeded) {
-                  await env.DB.prepare(`UPDATE players SET level = level + 1, xp = xp - ? WHERE id = ?`).bind(xpNeeded, userId).run();
+                  const remainingXp = newXp - xpNeeded;
+                  await env.DB.prepare(`UPDATE players SET level = level + 1, xp = ? WHERE id = ?`).bind(remainingXp, userId).run();
                   await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
                     method: 'POST',
                     headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
