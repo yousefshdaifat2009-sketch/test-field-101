@@ -28,10 +28,7 @@ export default {
           { name: 'cases', description: 'View your active cases', type: 1 },
           { name: 'notebook', description: 'View your collected clues', type: 1 },
           { name: 'bonds', description: 'View your relationships with NPCs', type: 1 },
-          { 
-            name: 'duel', description: 'Duel another player', type: 1,
-            options: [{ name: 'user', description: 'The player to duel', type: 6, required: true }]
-          },
+          { name: 'duel', description: 'Duel another player', type: 1, options: [{ name: 'user', description: 'The player to duel', type: 6, required: true }] },
           { 
             name: 'admin', description: 'Owner commands', type: 1,
             options: [
@@ -138,18 +135,27 @@ export default {
           if (subcommand === 'boss') {
             const targetUser = interaction.data.options[0].options[0].value;
             ctx.waitUntil((async () => {
+               let introMsg = "🩸 **BOSS FIGHT: The Rogue Vampire** [Difficulty: Hard]\nA cold wind blows through the abandoned warehouse. The Rogue Vampire steps out of the shadows, its eyes glowing red.";
+               try {
+                 const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                   method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+                   body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: 'You are a Rogue Vampire in Call of the Night. Write one intimidating, short sentence to a player who just confronted you in a dark warehouse.' }], max_tokens: 100 })
+                 });
+                 const aiData: any = await aiRes.json();
+                 introMsg += `\n> *"${aiData.choices[0].message.content}"*`;
+               } catch(e) {}
+
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
+               await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials) VALUES (?, ?, 100, ?, 150, ?, 2, 2)').bind(interaction.channel_id, targetUser, "rogue_vampire", targetUser).run();
                
-               const bossId = "rogue_vampire";
-               await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id) VALUES (?, ?, 100, ?, 150, ?)').bind(interaction.channel_id, targetUser, bossId, targetUser).run();
                await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
                  method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                  body: JSON.stringify({ 
-                   content: `🩸 **BOSS FIGHT: Rogue Vampire** 🩸\n<@${targetUser}> has cornered the Rogue Vampire! It has **150 HP**. You have **100 HP**.\n\n👉 **<@${targetUser}>, it is your turn!**`,
+                   content: `${introMsg}\n\n**Your HP:** 100/100 | **Boss HP:** 150/150\n\n👉 **<@${targetUser}>, it is your turn!**`,
                    components: [{ type: 1, components: [
                      { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                      { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
-                     { type: 2, style: 3, label: "Special Ability", custom_id: "combat_special" }
+                     { type: 2, style: 3, label: "Special (2 Left)", custom_id: "combat_special" }
                    ]}]
                  })
                });
@@ -310,13 +316,12 @@ export default {
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
 
-        // --- COMBAT SYSTEM ---
         if (cid.startsWith('duel_accept_')) {
           const p1Id = cid.replace('duel_accept_', '');
           const p2Id = userId;
           ctx.waitUntil((async () => {
              await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
-             await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id) VALUES (?, ?, 100, ?, 100, ?)').bind(interaction.channel_id, p1Id, p2Id, p1Id).run();
+             await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials) VALUES (?, ?, 100, ?, 100, ?, 2, 2)').bind(interaction.channel_id, p1Id, p2Id, p1Id).run();
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
@@ -324,7 +329,7 @@ export default {
                  components: [{ type: 1, components: [
                    { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                    { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
-                   { type: 2, style: 3, label: "Special Ability", custom_id: "combat_special" }
+                   { type: 2, style: 3, label: "Special (2 Left)", custom_id: "combat_special" }
                  ]}]
                })
              });
@@ -345,79 +350,86 @@ export default {
                return;
              }
 
-             let dmg = 0;
-             let msg = "";
-             // Safety check for HP parsing
-             let p1Hp = session.p1_hp !== null ? Number(session.p1_hp) : 100;
-             let p2Hp = session.p2_hp !== null ? Number(session.p2_hp) : (session.p2_id === 'rogue_vampire' ? 150 : 100);
+             let p1Hp = Number(session.p1_hp);
+             let p2Hp = Number(session.p2_hp);
+             let p1Specials = Number(session.p1_specials);
+             let p2Specials = Number(session.p2_specials);
+
+             let pDmg = 0;
+             let pActionMsg = "";
+             let pDefending = false;
 
              if (cid === 'combat_attack') {
-               dmg = Math.floor(Math.random() * 15) + 10;
-               msg = `⚔️ <@${userId}> attacks for **${dmg} damage**!`;
-             } else if (cid === 'combat_special') {
-               const player: any = await env.DB.prepare('SELECT track FROM players WHERE id = ?').bind(userId).first();
-               if (player && player.track === 'Vampire Offspring') {
-                 dmg = 15;
-                 p1Hp = Math.min(100, p1Hp + 15);
-                 msg = `🩸 <@${userId}> uses **Blood Drain**! Deals 15 dmg and heals 15 HP!`;
-               } else {
-                 dmg = 35;
-                 msg = `🗡️ <@${userId}> uses **Stake Throw**! Deals massive 35 damage!`;
-               }
+               pDmg = Math.floor(Math.random() * 10) + 10;
+               pActionMsg = `⚔️ <@${userId}> attacks for **${pDmg}**!`;
              } else if (cid === 'combat_defend') {
-               msg = `🛡️ <@${userId}> defends.`;
+               pDefending = true;
+               p1Hp = Math.min(100, p1Hp + 5);
+               pActionMsg = `🛡️ <@${userId}> defends and recovers 5 HP.`;
+             } else if (cid === 'combat_special') {
+               if (p1Specials <= 0) {
+                  await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You are out of Special uses!", flags: InteractionResponseFlags.EPHEMERAL }) });
+                  return;
+               }
+               p1Specials--;
+               pDmg = 35;
+               pActionMsg = `✨ <@${userId}> uses **Stake Throw** for massive **${pDmg}** damage!`;
              }
 
-             if (session.p2_id === 'rogue_vampire') {
-               p2Hp -= dmg;
-             } else if (userId === session.p1_id) {
-               p2Hp -= dmg;
-             } else {
-               p1Hp -= dmg;
-             }
+             p2Hp -= pDmg;
 
-             let nextTurn = session.turn_id === session.p1_id ? session.p2_id : session.p1_id;
-             let extraMsg = "";
+             // Boss Turn
+             let bossMsg = "";
+             let bossDmg = 0;
+             if (p2Hp > 0 && session.p2_id === 'rogue_vampire') {
+               await new Promise(r => setTimeout(r, 2500)); // 2.5 second delay
 
-             // NPC Auto-Attack Logic
-             if (nextTurn === 'rogue_vampire' && p2Hp > 0) {
-               const bossDmg = Math.floor(Math.random() * 10) + 10;
+               const bossMove = Math.random();
+               if (bossMove < 0.6) {
+                 bossDmg = Math.floor(Math.random() * 10) + 12;
+                 bossMsg = `🩸 The Vampire claws you for **${bossDmg}** damage!`;
+               } else if (bossMove < 0.8) {
+                 bossMsg = `🛡️ The Vampire circles you, regaining its composure.`;
+                 p2Hp = Math.min(150, p2Hp + 10);
+               } else {
+                 if (p2Specials > 0) {
+                   p2Specials--;
+                   bossDmg = 25;
+                   bossMsg = `🦇 The Vampire uses **Shadow Strike** for **${bossDmg}** damage!`;
+                 } else {
+                   bossDmg = Math.floor(Math.random() * 10) + 12;
+                   bossMsg = `🩸 The Vampire strikes for **${bossDmg}** damage!`;
+                 }
+               }
+
+               if (pDefending) bossDmg = Math.floor(bossDmg / 2);
+               if (cid !== 'combat_defend') bossDmg = Math.floor(bossDmg * 1.5);
+
                p1Hp -= bossDmg;
-               extraMsg = `\n🩸 The **Rogue Vampire** strikes back for **${bossDmg} damage**!`;
-               nextTurn = session.p1_id; // Return turn to player
              }
 
              // Check Death
              if (p1Hp <= 0 || p2Hp <= 0) {
-               let winner = "";
-               let loser = "";
-               if (p1Hp <= 0) {
-                 winner = session.p2_id === 'rogue_vampire' ? "The Rogue Vampire" : `<@${session.p2_id}>`;
-                 loser = `<@${session.p1_id}>`;
-               } else {
-                 winner = session.p1_id === session.p1_id ? `<@${session.p1_id}>` : `<@${session.p2_id}>`; // Player wins
-                 loser = session.p2_id === 'rogue_vampire' ? "The Rogue Vampire" : `<@${session.p2_id}>`;
-               }
-               
+               let winMsg = p1Hp <= 0 ? `💀 **You have been defeated.**\nYou wake up in your apartment with a throbbing headache.` : `🏆 **YOU WIN!**\nThe Rogue Vampire turns to ash. You survived the night.`;
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ content: `${msg}${extraMsg}\n\n💀 **${winner} wins!**\n${loser} ${loser === "The Rogue Vampire" ? "is defeated." : "wakes up in their apartment. (Hospital cooldown activated)"}`, components: [] })
+                 body: JSON.stringify({ content: `${pActionMsg}\n${bossMsg}\n\n${winMsg}`, components: [] })
                });
                return;
              }
 
-             // Update Database
-             await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ?, p2_hp = ?, turn_id = ? WHERE id = ?').bind(p1Hp, p2Hp, nextTurn, session.id).run();
+             // Update DB
+             await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ?, p2_hp = ?, p1_specials = ?, p2_specials = ? WHERE id = ?').bind(p1Hp, p2Hp, p1Specials, p2Specials, session.id).run();
 
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
-                 content: `${msg}${extraMsg}\n\n❤️ P1 HP: ${p1Hp} | P2 HP: ${p2Hp}\n\n👉 **<@${nextTurn}>, it is your turn!**`,
+                 content: `${pActionMsg}\n${bossMsg}\n\n**Your HP:** ${p1Hp}/100 | **Boss HP:** ${p2Hp}/150\n\n👉 **<@${userId}>, it is your turn!**`,
                  components: [{ type: 1, components: [
                    { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                    { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
-                   { type: 2, style: 3, label: "Special Ability", custom_id: "combat_special" }
+                   { type: 2, style: 3, label: `Special (${p1Specials} Left)`, custom_id: "combat_special" }
                  ]}]
                })
              });
