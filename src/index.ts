@@ -50,32 +50,51 @@ export default {
         
         if (interaction.data.name === 'progress') {
           ctx.waitUntil((async () => {
-            const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
-            let content = "You haven't created a character yet. Use `/begin` to start.";
-            if (player) {
-              const xpNeeded = player.level * 100; // Simple formula: Lvl 1 needs 100, Lvl 2 needs 200, etc.
-              const barLength = 10;
-              const progress = Math.min(Math.floor((player.xp / xpNeeded) * barLength), barLength);
-              const bar = "▓".repeat(progress) + "░".repeat(barLength - progress);
-              content = `**Level ${player.level}**\nXP: ${player.xp} / ${xpNeeded}\n[${bar}]`;
+            try {
+              const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
+              let content = "You haven't created a character yet. Use `/begin` to start.";
+              
+              if (player) {
+                // Force numbers just in case D1 returns strings
+                const lvl = Number(player.level) || 1;
+                const xp = Number(player.xp) || 0;
+                const xpNeeded = lvl * 100; 
+                
+                const barLength = 10;
+                const progress = Math.min(Math.floor((xp / xpNeeded) * barLength), barLength);
+                const bar = "▓".repeat(progress) + "░".repeat(barLength - progress);
+                content = `**Level ${lvl}**\nXP: ${xp} / ${xpNeeded}\n[${bar}]`;
+              }
+              
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
+              });
+            } catch (error: any) {
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ content: `**Error:** ${error.message}` })
+              });
             }
-            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
-            });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (interaction.data.name === 'sheet') {
           ctx.waitUntil((async () => {
-            const player: any = await env.DB.prepare('SELECT * FROM players WHERE id = ?').bind(userId).first();
-            let content = "You haven't created a character yet. Use `/begin` to start.";
-            if (player && player.level > 0) {
-              content = `**${player.name}**\n*${player.appearance}*\n\n**Level ${player.level}** | XP: ${player.xp}\n**Trait:** ${player.traits}\n**Background:** ${player.background}\n**Blood Type:** ${player.blood_type}\n\n**Stats:**\n${player.stats}`;
+            try {
+              const player: any = await env.DB.prepare('SELECT * FROM players WHERE id = ?').bind(userId).first();
+              let content = "You haven't created a character yet. Use `/begin` to start.";
+              if (player && player.level > 0) {
+                content = `**${player.name}**\n*${player.appearance}*\n\n**Level ${player.level}** | XP: ${player.xp}\n**Trait:** ${player.traits}\n**Background:** ${player.background}\n**Blood Type:** ${player.blood_type}\n\n**Stats:**\n${player.stats}`;
+              }
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
+              });
+            } catch (error: any) {
+               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**Error:** ${error.message}` })
+              });
             }
-            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
-            });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -127,7 +146,6 @@ export default {
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
 
-        // Character Creation Buttons
         if (cid === 'start_create') {
           return new Response(JSON.stringify({
             type: InteractionResponseType.MODAL,
@@ -174,7 +192,6 @@ export default {
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- EXPLORE BUTTONS ---
         if (cid.startsWith('go_')) {
           const location = cid.replace('go_', '');
           const locName = location.charAt(0).toUpperCase() + location.slice(1);
@@ -234,7 +251,6 @@ export default {
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- TALK TO NAZUNA ---
         if (cid === 'talk_nazuna') {
           return new Response(JSON.stringify({
             type: InteractionResponseType.MODAL,
@@ -247,7 +263,6 @@ export default {
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- LEAVE SCENE ---
         if (cid === 'leave_scene') {
           ctx.waitUntil((async () => {
              await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, {
@@ -283,7 +298,6 @@ export default {
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // --- NAZUNA DIALOGUE ---
         if (interaction.data.custom_id === 'modal_nazuna') {
           const userMessage = interaction.data.components[0].components[0].value;
           const threadId = interaction.channel_id;
@@ -293,7 +307,6 @@ export default {
               const player: any = await env.DB.prepare('SELECT name, xp, level FROM players WHERE id = ?').bind(userId).first();
               const playerName = player ? player.name : "a stranger";
 
-              // 1. Generate AI response
               const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
@@ -311,7 +324,6 @@ export default {
               const aiData: any = await aiRes.json();
               const reply = aiData.choices[0].message.content;
 
-              // 2. Send Webhook
               const threadInfoRes = await fetch(`https://discord.com/api/v10/channels/${threadId}`, {
                 headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
               });
@@ -323,6 +335,8 @@ export default {
                 headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: "Nazuna" })
               });
+              
+              if (!webhookRes.ok) throw new Error(`Webhook creation failed. Error: ${await webhookRes.text()}`);
               const webhookData: any = await webhookRes.json();
               
               await fetch(`https://discord.com/api/v10/webhooks/${webhookData.id}/${webhookData.token}?thread_id=${threadId}`, {
@@ -331,26 +345,24 @@ export default {
                 body: JSON.stringify({ content: reply, username: "Nazuna Nanakusa" })
               });
 
-              // 3. Grant XP!
               if (player) {
-                const newXp = player.xp + 50;
-                const xpNeeded = player.level * 100;
+                const currentLvl = Number(player.level) || 1;
+                const currentXp = Number(player.xp) || 0;
+                const newXp = currentXp + 50;
+                const xpNeeded = currentLvl * 100;
                 
                 if (newXp >= xpNeeded) {
-                  // Level Up!
                   await env.DB.prepare(`UPDATE players SET level = level + 1, xp = xp - ? WHERE id = ?`).bind(xpNeeded, userId).run();
                   await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
                     method: 'POST',
                     headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${player.level + 1}.` })
+                    body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${currentLvl + 1}.` })
                   });
                 } else {
-                  // Just add XP
                   await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
                 }
               }
 
-              // Delete thinking message
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                 method: 'DELETE'
               });
