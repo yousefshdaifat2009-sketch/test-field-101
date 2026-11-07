@@ -290,17 +290,26 @@ export default {
               const aiData: any = await aiRes.json();
               const reply = aiData.choices[0].message.content;
 
-              const webhookRes = await fetch(`https://discord.com/api/v10/channels/${threadId}/webhooks`, {
+              // Fetch thread to get parent channel
+              const threadInfoRes = await fetch(`https://discord.com/api/v10/channels/${threadId}`, {
+                headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
+              });
+              const threadInfo: any = await threadInfoRes.json();
+              const parentChannelId = threadInfo.parent_id;
+
+              // Create webhook in the PARENT channel
+              const webhookRes = await fetch(`https://discord.com/api/v10/channels/${parentChannelId}/webhooks`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: "Nazuna" })
               });
               
-              if (!webhookRes.ok) throw new Error(`Webhook creation failed. Make sure the bot has 'Manage Webhooks' permission. Error: ${await webhookRes.text()}`);
+              if (!webhookRes.ok) throw new Error(`Webhook creation failed. Error: ${await webhookRes.text()}`);
               
               const webhookData: any = await webhookRes.json();
               
-              const sendRes = await fetch(`https://discord.com/api/webhooks/${webhookData.id}/${webhookData.token}`, {
+              // Execute webhook in the THREAD using ?thread_id=
+              const sendRes = await fetch(`https://discord.com/api/webhooks/${webhookData.id}/${webhookData.token}?thread_id=${threadId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
