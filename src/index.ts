@@ -185,7 +185,7 @@ export default {
                 body: JSON.stringify({
                   model: 'openai/gpt-oss-20b',
                   messages: [{ role: 'system', content: `You are a narrator for Call of the Night. Write a 2-sentence atmospheric description of a ${locName} at ${timeStr}. Be melancholic and brief.` }],
-                  max_tokens: 80
+                  max_tokens: 300 // Increased from 80 to allow reasoning + output
                 })
               });
 
