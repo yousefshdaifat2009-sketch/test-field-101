@@ -22,7 +22,8 @@ export default {
           { name: 'ping', description: 'Replies with Pong!', type: 1 },
           { name: 'begin', description: 'Start your character creation', type: 1 },
           { name: 'sheet', description: 'View your character sheet', type: 1 },
-          { name: 'explore', description: 'Explore the city', type: 1 }
+          { name: 'explore', description: 'Explore the city', type: 1 },
+          { name: 'progress', description: 'Check your XP and level', type: 1 }
         ])
       });
       return new Response(`Registration response: ${await response.text()}`, { status: 200 });
@@ -46,9 +47,28 @@ export default {
 
       // --- SLASH COMMANDS ---
       if (interaction.type === InteractionType.APPLICATION_COMMAND) {
+        
+        if (interaction.data.name === 'progress') {
+          ctx.waitUntil((async () => {
+            const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
+            let content = "You haven't created a character yet. Use `/begin` to start.";
+            if (player) {
+              const xpNeeded = player.level * 100; // Simple formula: Lvl 1 needs 100, Lvl 2 needs 200, etc.
+              const barLength = 10;
+              const progress = Math.min(Math.floor((player.xp / xpNeeded) * barLength), barLength);
+              const bar = "▓".repeat(progress) + "░".repeat(barLength - progress);
+              content = `**Level ${player.level}**\nXP: ${player.xp} / ${xpNeeded}\n[${bar}]`;
+            }
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content })
+            });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
         if (interaction.data.name === 'sheet') {
           ctx.waitUntil((async () => {
-            const player = await env.DB.prepare('SELECT * FROM players WHERE id = ?').bind(userId).first();
+            const player: any = await env.DB.prepare('SELECT * FROM players WHERE id = ?').bind(userId).first();
             let content = "You haven't created a character yet. Use `/begin` to start.";
             if (player && player.level > 0) {
               content = `**${player.name}**\n*${player.appearance}*\n\n**Level ${player.level}** | XP: ${player.xp}\n**Trait:** ${player.traits}\n**Background:** ${player.background}\n**Blood Type:** ${player.blood_type}\n\n**Stats:**\n${player.stats}`;
@@ -270,9 +290,10 @@ export default {
           
           ctx.waitUntil((async () => {
             try {
-              const player: any = await env.DB.prepare('SELECT name FROM players WHERE id = ?').bind(userId).first();
+              const player: any = await env.DB.prepare('SELECT name, xp, level FROM players WHERE id = ?').bind(userId).first();
               const playerName = player ? player.name : "a stranger";
 
+              // 1. Generate AI response
               const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
@@ -290,37 +311,46 @@ export default {
               const aiData: any = await aiRes.json();
               const reply = aiData.choices[0].message.content;
 
-              // Fetch thread to get parent channel
+              // 2. Send Webhook
               const threadInfoRes = await fetch(`https://discord.com/api/v10/channels/${threadId}`, {
                 headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` }
               });
               const threadInfo: any = await threadInfoRes.json();
               const parentChannelId = threadInfo.parent_id;
 
-              // Create webhook in the PARENT channel
               const webhookRes = await fetch(`https://discord.com/api/v10/channels/${parentChannelId}/webhooks`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: "Nazuna" })
               });
-              
-              if (!webhookRes.ok) throw new Error(`Webhook creation failed. Error: ${await webhookRes.text()}`);
-              
               const webhookData: any = await webhookRes.json();
               
-              // Execute webhook in the THREAD using ?thread_id=
-              const sendRes = await fetch(`https://discord.com/api/webhooks/${webhookData.id}/${webhookData.token}?thread_id=${threadId}`, {
+              await fetch(`https://discord.com/api/v10/webhooks/${webhookData.id}/${webhookData.token}?thread_id=${threadId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  content: reply,
-                  username: "Nazuna Nanakusa"
-                })
+                body: JSON.stringify({ content: reply, username: "Nazuna Nanakusa" })
               });
 
-              if (!sendRes.ok) throw new Error(`Failed to send webhook message: ${await sendRes.text()}`);
+              // 3. Grant XP!
+              if (player) {
+                const newXp = player.xp + 50;
+                const xpNeeded = player.level * 100;
+                
+                if (newXp >= xpNeeded) {
+                  // Level Up!
+                  await env.DB.prepare(`UPDATE players SET level = level + 1, xp = xp - ? WHERE id = ?`).bind(xpNeeded, userId).run();
+                  await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${player.level + 1}.` })
+                  });
+                } else {
+                  // Just add XP
+                  await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
+                }
+              }
 
-              // Delete the thinking message
+              // Delete thinking message
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                 method: 'DELETE'
               });
