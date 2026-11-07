@@ -76,6 +76,9 @@ export default {
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "Both players must have a character created." }) });
                return;
              }
+             // Cleanup old sessions
+             await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
+             
              await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
                method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
@@ -136,6 +139,9 @@ export default {
           if (subcommand === 'boss') {
             const targetUser = interaction.data.options[0].options[0].value;
             ctx.waitUntil((async () => {
+               // Cleanup old sessions
+               await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
+               
                const bossId = "rogue_vampire";
                await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id) VALUES (?, ?, 100, ?, 150, ?)').bind(interaction.channel_id, targetUser, bossId, targetUser).run();
                await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
@@ -307,10 +313,11 @@ export default {
         const cid = interaction.data.custom_id;
 
         // --- COMBAT SYSTEM ---
-        if (cid === 'duel_accept_' || cid.startsWith('duel_accept_')) {
+        if (cid.startsWith('duel_accept_')) {
           const p1Id = cid.replace('duel_accept_', '');
-          const p2Id = userId; // The person clicking accept
+          const p2Id = userId;
           ctx.waitUntil((async () => {
+             await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
              await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id) VALUES (?, ?, 100, ?, 100, ?)').bind(interaction.channel_id, p1Id, p2Id, p1Id).run();
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -333,7 +340,7 @@ export default {
 
         if (cid === 'combat_attack' || cid === 'combat_special' || cid === 'combat_defend') {
           ctx.waitUntil((async () => {
-             const session: any = await env.DB.prepare('SELECT * FROM combat_sessions WHERE channel_id = ? AND status = "active"').bind(interaction.channel_id).first();
+             const session: any = await env.DB.prepare('SELECT * FROM combat_sessions WHERE channel_id = ? AND status = "active" ORDER BY id DESC LIMIT 1').bind(interaction.channel_id).first();
              if (!session) return;
              if (userId !== session.turn_id) {
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "It is not your turn.", flags: InteractionResponseFlags.EPHEMERAL }) });
@@ -346,7 +353,7 @@ export default {
              let p2Hp = session.p2_hp;
 
              if (cid === 'combat_attack') {
-               dmg = Math.floor(Math.random() * 15) + 10; // 10-25 dmg
+               dmg = Math.floor(Math.random() * 15) + 10;
                msg = `⚔️ <@${userId}> attacks for **${dmg} damage**!`;
              } else if (cid === 'combat_special') {
                const player: any = await env.DB.prepare('SELECT track FROM players WHERE id = ?').bind(userId).first();
@@ -355,15 +362,13 @@ export default {
                  p1Hp = Math.min(100, p1Hp + 15);
                  msg = `🩸 <@${userId}> uses **Blood Drain**! Deals 15 dmg and heals 15 HP!`;
                } else {
-                 dmg = 35; // Detective Stake Throw
+                 dmg = 35;
                  msg = `🗡️ <@${userId}> uses **Stake Throw**! Deals massive 35 damage!`;
                }
              } else if (cid === 'combat_defend') {
-               msg = `🛡️ <@${userId}> defends. Damage taken next turn is halved.`;
-               // Defend logic is simple for now, just switch turn.
+               msg = `🛡️ <@${userId}> defends.`;
              }
 
-             // Apply Damage
              if (session.p2_id === 'rogue_vampire') {
                p2Hp -= dmg;
              } else if (userId === session.p1_id) {
@@ -372,26 +377,37 @@ export default {
                p1Hp -= dmg;
              }
 
+             let nextTurn = session.turn_id === session.p1_id ? session.p2_id : session.p1_id;
+             let extraMsg = "";
+
+             // NPC Auto-Attack Logic
+             if (nextTurn === 'rogue_vampire' && p2Hp > 0) {
+               const bossDmg = Math.floor(Math.random() * 10) + 10;
+               p1Hp -= bossDmg;
+               extraMsg = `\n🩸 The **Rogue Vampire** strikes back for **${bossDmg} damage**!`;
+               nextTurn = session.p1_id; // Return turn to player
+             }
+
              // Check Death
              if (p1Hp <= 0 || p2Hp <= 0) {
-               let winner = p1Hp > 0 ? session.p1_id : session.p2_id;
-               let loser = p1Hp <= 0 ? session.p1_id : session.p2_id;
+               let winner = p1Hp > 0 ? "The Player" : (session.p2_id === 'rogue_vampire' ? "The Rogue Vampire" : "Player 2");
+               let loser = p1Hp <= 0 ? "The Player" : (session.p2_id === 'rogue_vampire' ? "The Rogue Vampire" : "Player 2");
+               
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ content: `${msg}\n\n💀 **${winner} wins!**\n${loser} wakes up in their apartment. (Hospital cooldown activated)`, components: [] })
+                 body: JSON.stringify({ content: `${msg}${extraMsg}\n\n💀 **${winner} wins!**\n${loser} wakes up in their apartment. (Hospital cooldown activated)`, components: [] })
                });
                return;
              }
 
-             // Switch Turn
-             let nextTurn = session.turn_id === session.p1_id ? session.p2_id : session.p1_id;
+             // Update Database
              await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ?, p2_hp = ?, turn_id = ? WHERE id = ?').bind(p1Hp, p2Hp, nextTurn, session.id).run();
 
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
-                 content: `${msg}\n\n❤️ P1 HP: ${p1Hp} | P2 HP: ${p2Hp}\n\n<@${nextTurn}>, it is your turn!`,
+                 content: `${msg}${extraMsg}\n\n❤️ P1 HP: ${p1Hp} | P2 HP: ${p2Hp}\n\n<@${nextTurn}>, it is your turn!`,
                  components: [{ type: 1, components: [
                    { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                    { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
@@ -421,9 +437,6 @@ export default {
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        // ... (All the other buttons: start_create, trait_, bg_, blood_, stats_, go_, talk_menu, talk_nazuna, investigate, leave_scene) ...
-        // (Assume these are identical to the previous working version)
-        
         if (cid === 'start_create') {
           return new Response(JSON.stringify({ type: InteractionResponseType.MODAL, data: { custom_id: 'modal_step1', title: 'Step 1: Who are you?', components: [{ type: 1, components: [{ type: 4, custom_id: 'name', label: 'Your Name', style: 1, min_length: 2, max_length: 32, required: true }] }, { type: 1, components: [{ type: 4, custom_id: 'appearance', label: 'Describe your appearance', style: 2, min_length: 5, max_length: 100, required: true }] }] } }), { headers: { 'Content-Type': 'application/json' } });
         }
