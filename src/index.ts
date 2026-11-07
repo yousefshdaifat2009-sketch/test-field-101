@@ -22,11 +22,7 @@ export default {
           { name: 'ping', description: 'Replies with Pong!', type: 1 },
           { name: 'begin', description: 'Start your character creation', type: 1 },
           { name: 'sheet', description: 'View your character sheet', type: 1 },
-          { name: 'explore', description: 'Explore the city', type: 1 },
-          { 
-            name: 'test-ai', description: 'Test the AI connection', type: 1,
-            options: [{ name: 'prompt', description: 'What to say to the AI', type: 3, required: true }]
-          }
+          { name: 'explore', description: 'Explore the city', type: 1 }
         ])
       });
       return new Response(`Registration response: ${await response.text()}`, { status: 200 });
@@ -105,39 +101,13 @@ export default {
             }
           }), { headers: { 'Content-Type': 'application/json' } });
         }
-
-        if (interaction.data.name === 'test-ai') {
-          const prompt = interaction.data.options[0].value;
-          ctx.waitUntil((async () => {
-            try {
-              const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  model: 'openai/gpt-oss-20b',
-                  messages: [{ role: 'system', content: 'You are a narrator for the anime Call of the Night. Be brief, melancholic, and mysterious.' }, { role: 'user', content: prompt }],
-                  max_tokens: 1000
-                })
-              });
-              const groqData: any = await groqRes.json();
-              const aiReply = groqData.choices[0].message.content;
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**AI:** ${aiReply}` })
-              });
-            } catch (error: any) {
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**Error:** ${error.message}` })
-              });
-            }
-          })());
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE }), { headers: { 'Content-Type': 'application/json' } });
-        }
       }
 
       // --- BUTTONS ---
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
 
+        // Character Creation Buttons
         if (cid === 'start_create') {
           return new Response(JSON.stringify({
             type: InteractionResponseType.MODAL,
@@ -190,6 +160,7 @@ export default {
           const locName = location.charAt(0).toUpperCase() + location.slice(1);
           
           ctx.waitUntil((async () => {
+            // 1. Create a thread
             const threadRes = await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/threads`, {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
@@ -198,8 +169,10 @@ export default {
             const threadData: any = await threadRes.json();
             const threadId = threadData.id;
 
+            // 2. Save scene to DB
             await env.DB.prepare(`INSERT INTO scenes (id, channel_id, location) VALUES (?, ?, ?)`).bind(threadId, interaction.channel_id, location).run();
 
+            // 3. Ask AI to describe the scene
             const tokyoHour = (new Date().getUTCHours() + 9) % 24;
             const isNight = tokyoHour >= 18 || tokyoHour < 6;
             const timeStr = isNight ? "night" : "day";
@@ -215,36 +188,48 @@ export default {
                   max_tokens: 1000
                 })
               });
-
-              if (!aiRes.ok) {
-                throw new Error(`Groq API Error: ${await aiRes.text()}`);
-              }
-
+              if (!aiRes.ok) throw new Error(`Groq API Error: ${await aiRes.text()}`);
               const aiData: any = await aiRes.json();
               desc = aiData.choices[0].message.content;
-              
-              if (!desc || desc.trim() === "") {
-                throw new Error(`Groq returned an empty string. Response: ${JSON.stringify(aiData)}`);
-              }
+              if (!desc || desc.trim() === "") throw new Error(`Empty AI response.`);
             } catch (error: any) {
               desc = `**Error generating scene:** ${error.message}`;
             }
+
+            // 4. Send message to the thread with Actions
+            const buttons = [];
+            if (location === 'rooftop') buttons.push({ type: 2, style: 1, label: "Talk to Nazuna", custom_id: "talk_nazuna" });
+            buttons.push({ type: 2, style: 4, label: "Leave", custom_id: "leave_scene" });
 
             await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, {
               method: 'POST',
               headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
                 content: `**${locName}**\n\n${desc}`,
-                components: [{ type: 1, components: [{ type: 2, style: 4, label: "Leave", custom_id: "leave_scene" }] }]
+                components: [{ type: 1, components: buttons }]
               })
             });
 
+            // 5. Delete the ephemeral message
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
               method: 'DELETE'
             });
           })());
 
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        // --- TALK TO NAZUNA ---
+        if (cid === 'talk_nazuna') {
+          return new Response(JSON.stringify({
+            type: InteractionResponseType.MODAL,
+            data: {
+              custom_id: 'modal_nazuna', title: 'Talk to Nazuna',
+              components: [
+                { type: 1, components: [{ type: 4, custom_id: 'message', label: 'What do you say?', style: 2, min_length: 1, max_length: 500, required: true }] }
+              ]
+            }
+          }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         // --- LEAVE SCENE ---
@@ -281,6 +266,58 @@ export default {
             type: InteractionResponseType.UPDATE_MESSAGE,
             data: { content: `Name: **${name}**\nAppearance: *${appearance}*\n\n**Step 2: What is your defining trait?**`, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Insomnia", custom_id: "trait_Insomnia" }, { type: 2, style: 1, label: "Night Owl", custom_id: "trait_NightOwl" }, { type: 2, style: 1, label: "Mysterious", custom_id: "trait_Mysterious" }]}] }
           }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        // --- NAZUNA DIALOGUE ---
+        if (interaction.data.custom_id === 'modal_nazuna') {
+          const userMessage = interaction.data.components[0].components[0].value;
+          const threadId = interaction.channel_id;
+          
+          ctx.waitUntil((async () => {
+            try {
+              // Fetch player info to make the AI know who they are talking to
+              const player: any = await env.DB.prepare('SELECT name FROM players WHERE id = ?').bind(userId).first();
+              const playerName = player ? player.name : "a stranger";
+
+              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  model: 'openai/gpt-oss-20b',
+                  messages: [
+                    { role: 'system', content: `You are Nazuna Nanakusa from Call of the Night. You are a vampire. You are teasing, slightly sarcastic, but caring. You are talking to ${playerName}. Never break character. Keep responses to 1-3 sentences.` },
+                    { role: 'user', content: userMessage }
+                  ],
+                  max_tokens: 1000
+                })
+              });
+              const aiData: any = await aiRes.json();
+              const reply = aiData.choices[0].message.content;
+
+              // Send Nazuna's reply as a webhook to look like her
+              const webhookRes = await fetch(`https://discord.com/api/v10/channels/${threadId}/webhooks`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: "Nazuna" })
+              });
+              const webhookData: any = await webhookRes.json();
+              
+              await fetch(`https://discord.com/api/webhooks/${webhookData.id}/${webhookData.token}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  content: reply,
+                  username: "Nazuna Nanakusa",
+                  avatar_url: "https://i.imgur.com/your_nazuna_image.png" // Placeholder
+                })
+              });
+
+            } catch (error) {
+              console.error(error);
+            }
+          })());
+
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE }), { headers: { 'Content-Type': 'application/json' } });
         }
       }
     }
