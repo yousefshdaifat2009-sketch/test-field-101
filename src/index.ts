@@ -135,23 +135,29 @@ export default {
           if (subcommand === 'boss') {
             const targetUser = interaction.data.options[0].options[0].value;
             ctx.waitUntil((async () => {
-               let introMsg = "🩸 **BOSS FIGHT: The Rogue Vampire** [Difficulty: Hard]\nA cold wind blows through the abandoned warehouse. The Rogue Vampire steps out of the shadows, its eyes glowing red.";
+               const playerData: any = await env.DB.prepare('SELECT level FROM players WHERE id = ?').bind(targetUser).first();
+               const pLevel = playerData ? Number(playerData.level) : 1;
+               const bossMaxHp = 100 + (pLevel * 15);
+               
+               let introDialogue = "A cold wind blows through the abandoned warehouse. The Rogue Vampire steps out of the shadows, its eyes glowing red.";
                try {
                  const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                    method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                   body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: 'You are a Rogue Vampire in Call of the Night. Write one intimidating, short sentence to a player who just confronted you in a dark warehouse.' }], max_tokens: 100 })
+                   body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: 'You are a Rogue Vampire in Call of the Night. Write one intimidating, short sentence to a player who just confronted you.' }], max_tokens: 100 })
                  });
                  const aiData: any = await aiRes.json();
-                 introMsg += `\n> *"${aiData.choices[0].message.content}"*`;
+                 introDialogue += `\n> *"${aiData.choices[0].message.content}"*`;
                } catch(e) {}
 
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
-               await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials) VALUES (?, ?, 100, ?, 150, ?, 2, 2)').bind(interaction.channel_id, targetUser, "rogue_vampire", targetUser).run();
+               await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials) VALUES (?, ?, 100, ?, ?, ?, 2, 2)').bind(interaction.channel_id, targetUser, "rogue_vampire", bossMaxHp, targetUser).run();
+               
+               const embed = createCombatEmbed(targetUser, 100, 100, "Rogue Vampire", bossMaxHp, bossMaxHp, `${introDialogue}\n\n👉 **<@${targetUser}>, it is your turn!**`);
                
                await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
                  method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                  body: JSON.stringify({ 
-                   content: `${introMsg}\n\n**Your HP:** 100/100 | **Boss HP:** 150/150\n\n👉 **<@${targetUser}>, it is your turn!**`,
+                   embeds: [embed],
                    components: [{ type: 1, components: [
                      { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                      { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
@@ -322,10 +328,13 @@ export default {
           ctx.waitUntil((async () => {
              await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
              await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials) VALUES (?, ?, 100, ?, 100, ?, 2, 2)').bind(interaction.channel_id, p1Id, p2Id, p1Id).run();
+             
+             const embed = createCombatEmbed(p1Id, 100, 100, "Player 2", 100, 100, `⚔️ **DUEL STARTED** ⚔️\n\n👉 **<@${p1Id}>, it is your turn!**`);
+             
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
-                 content: `⚔️ **DUEL STARTED** ⚔️\n<@${p1Id}> (100 HP) vs <@${p2Id}> (100 HP)\n\n👉 **<@${p1Id}>, it is your turn!**`,
+                 embeds: [embed],
                  components: [{ type: 1, components: [
                    { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                    { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
@@ -350,6 +359,9 @@ export default {
                return;
              }
 
+             const playerData: any = await env.DB.prepare('SELECT level FROM players WHERE id = ?').bind(userId).first();
+             const pLevel = playerData ? Number(playerData.level) : 1;
+
              let p1Hp = Number(session.p1_hp);
              let p2Hp = Number(session.p2_hp);
              let p1Specials = Number(session.p1_specials);
@@ -358,25 +370,35 @@ export default {
              let pDmg = 0;
              let pActionMsg = "";
              let pDefending = false;
+             let isCrit = false;
 
+             // Player Action
              if (cid === 'combat_attack') {
-               pDmg = Math.floor(Math.random() * 10) + 10;
-               pActionMsg = `⚔️ <@${userId}> attacks for **${pDmg}**!`;
+               pDmg = Math.floor(Math.random() * 10) + 10 + Math.floor(pLevel / 2);
+               if (Math.random() < 0.15) { pDmg *= 2; isCrit = true; }
+               pActionMsg = isCrit ? `⚔️ **CRITICAL HIT!** <@${userId}> strikes a vital point for **${pDmg}** damage!` : `⚔️ <@${userId}> attacks for **${pDmg}** damage.`;
              } else if (cid === 'combat_defend') {
                pDefending = true;
-               p1Hp = Math.min(100, p1Hp + 5);
-               pActionMsg = `🛡️ <@${userId}> defends and recovers 5 HP.`;
+               p1Hp = Math.min(100, p1Hp + 15);
+               pActionMsg = `🛡️ <@${userId}> takes a defensive stance and recovers 15 HP.`;
              } else if (cid === 'combat_special') {
                if (p1Specials <= 0) {
                   await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You are out of Special uses!", flags: InteractionResponseFlags.EPHEMERAL }) });
                   return;
                }
                p1Specials--;
-               pDmg = 35;
-               pActionMsg = `✨ <@${userId}> uses **Stake Throw** for massive **${pDmg}** damage!`;
+               pDmg = 35 + pLevel;
+               pActionMsg = `✨ <@${userId}> unleashes their Special Ability for massive **${pDmg}** damage!`;
              }
 
              p2Hp -= pDmg;
+
+             // Remove buttons during delay
+             const thinkingEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 15), `${pActionMsg}\n\n⏳ **The enemy is calculating its move...**`);
+             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ embeds: [thinkingEmbed], components: [] })
+             });
 
              // Boss Turn
              let bossMsg = "";
@@ -386,35 +408,45 @@ export default {
 
                const bossMove = Math.random();
                if (bossMove < 0.6) {
-                 bossDmg = Math.floor(Math.random() * 10) + 12;
-                 bossMsg = `🩸 The Vampire claws you for **${bossDmg}** damage!`;
+                 bossDmg = Math.floor(Math.random() * 10) + 12 + Math.floor(pLevel * 1.5);
+                 bossMsg = `🩸 The Vampire lunges with unnatural speed, tearing into you for **${bossDmg}** damage!`;
                } else if (bossMove < 0.8) {
-                 bossMsg = `🛡️ The Vampire circles you, regaining its composure.`;
-                 p2Hp = Math.min(150, p2Hp + 10);
+                 bossMsg = `🛡️ The Vampire dissolves into shadows, avoiding damage and recovering its strength.`;
+                 p2Hp = Math.min(150 + (pLevel * 15), p2Hp + 20);
                } else {
                  if (p2Specials > 0) {
                    p2Specials--;
-                   bossDmg = 25;
-                   bossMsg = `🦇 The Vampire uses **Shadow Strike** for **${bossDmg}** damage!`;
+                   bossDmg = 25 + pLevel;
+                   bossMsg = `🦇 The Vampire vanishes and reappears behind you, using **Shadow Strike** for **${bossDmg}** damage!`;
                  } else {
-                   bossDmg = Math.floor(Math.random() * 10) + 12;
+                   bossDmg = Math.floor(Math.random() * 10) + 12 + Math.floor(pLevel * 1.5);
                    bossMsg = `🩸 The Vampire strikes for **${bossDmg}** damage!`;
                  }
                }
 
-               if (pDefending) bossDmg = Math.floor(bossDmg / 2);
-               if (cid !== 'combat_defend') bossDmg = Math.floor(bossDmg * 1.5);
+               if (pDefending) {
+                 bossDmg = Math.floor(bossDmg / 2);
+                 bossMsg += "\n*(Your defense halved the damage!)*";
+               }
+               if (cid !== 'combat_defend') {
+                 bossDmg = Math.floor(bossDmg * 1.5);
+                 bossMsg += "\n*(You left yourself open!)*";
+               }
 
                p1Hp -= bossDmg;
              }
 
              // Check Death
              if (p1Hp <= 0 || p2Hp <= 0) {
-               let winMsg = p1Hp <= 0 ? `💀 **You have been defeated.**\nYou wake up in your apartment with a throbbing headache.` : `🏆 **YOU WIN!**\nThe Rogue Vampire turns to ash. You survived the night.`;
+               let winMsg = p1Hp <= 0 ? `💀 **You have been defeated.**\nYou wake up in your apartment with a throbbing headache.` : `🏆 **VICTORY!**\nThe Rogue Vampire turns to ash. You survived the night.`;
+               
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
+               
+               const finalEmbed = createCombatEmbed(userId, Math.max(0, p1Hp), 100, "Rogue Vampire", Math.max(0, p2Hp), 150 + (pLevel * 15), `${bossMsg}\n\n${winMsg}`);
+               
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ content: `${pActionMsg}\n${bossMsg}\n\n${winMsg}`, components: [] })
+                 body: JSON.stringify({ embeds: [finalEmbed], components: [] })
                });
                return;
              }
@@ -422,10 +454,13 @@ export default {
              // Update DB
              await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ?, p2_hp = ?, p1_specials = ?, p2_specials = ? WHERE id = ?').bind(p1Hp, p2Hp, p1Specials, p2Specials, session.id).run();
 
+             // Bring buttons back for the next turn
+             const nextEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 15), `${bossMsg}\n\n👉 **<@${userId}>, it is your turn!**`);
+             
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
-                 content: `${pActionMsg}\n${bossMsg}\n\n**Your HP:** ${p1Hp}/100 | **Boss HP:** ${p2Hp}/150\n\n👉 **<@${userId}>, it is your turn!**`,
+                 embeds: [nextEmbed],
                  components: [{ type: 1, components: [
                    { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
                    { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
@@ -656,6 +691,7 @@ export default {
   }
 };
 
+// --- HELPER FUNCTIONS ---
 async function processLevelUp(env: Env, userId: string) {
   const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
   if (!player) return null;
@@ -668,4 +704,36 @@ async function processLevelUp(env: Env, userId: string) {
     return { level: lvl, xp: xp };
   }
   return null;
+}
+
+function createCombatEmbed(p1Id: string, p1Hp: number, p1MaxHp: number, p2Name: string, p2Hp: number, p2MaxHp: number, description: string) {
+  // HP Bars
+  const p1BarLen = 10;
+  const p1Prog = Math.max(0, Math.ceil((p1Hp / p1MaxHp) * p1BarLen));
+  const p1Bar = "🟩".repeat(p1Prog) + "⬛".repeat(p1BarLen - p1Prog);
+
+  const p2BarLen = 10;
+  const p2Prog = Math.max(0, Math.ceil((p2Hp / p2MaxHp) * p2BarLen));
+  const p2Bar = "🟥".repeat(p2Prog) + "⬛".repeat(p2BarLen - p2Prog);
+
+  return {
+    title: "⚔️ BATTLE",
+    color: 0x8B0000,
+    description: description,
+    fields: [
+      {
+        name: `🧑 <@${p1Id}>`,
+        value: `${p1Bar}\n**HP:** ${Math.max(0, p1Hp)} / ${p1MaxHp}`,
+        inline: true
+      },
+      {
+        name: `🩸 ${p2Name}`,
+        value: `${p2Bar}\n**HP:** ${Math.max(0, p2Hp)} / ${p2MaxHp}`,
+        inline: true
+      }
+    ],
+    footer: {
+      text: "Call of the Night RPG"
+    }
+  };
 }
