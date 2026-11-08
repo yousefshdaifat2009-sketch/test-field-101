@@ -376,6 +376,9 @@ export default {
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
+        
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        }
         if (cid === 'game_td_truth' || cid === 'game_td_dare') {
           const isTruth = cid === 'game_td_truth';
           ctx.waitUntil((async () => {
@@ -390,23 +393,22 @@ export default {
                 })
               });
               const aiData: any = await aiRes.json();
-              if (aiData.choices && aiData.choices[0].message.content) prompt = aiData.choices[0].message.content;
+              if (aiData.choices && aiData.choices[0].message.content) {
+                const aiText = aiData.choices[0].message.content.trim().replace(/^"|"$/g, '');
+                if (aiText.length > 5) { prompt = aiText; }
+              }
             } catch (e) {}
 
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
                 content: `🎲 **Truth or Dare**\nNazuna leans in close.\n\n> *"${prompt}"*`,
-                components: [{ type: 1, components: [
-                  { type: 2, style: 3, label: "I Accept", custom_id: "game_td_accept" },
-                  { type: 2, style: 4, label: "Quit", custom_id: "game_quit" }
-                ]}]
+                components: [{ type: 1, components: [{ type: 2, style: 3, label: "I Accept", custom_id: "game_td_accept" }, { type: 2, style: 4, label: "Quit", custom_id: "game_quit" }]}] 
               })
             });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
-
         if (cid === 'game_td_accept') {
           ctx.waitUntil((async () => {
             await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
@@ -1022,36 +1024,44 @@ export default {
           ctx.waitUntil((async () => { await env.DB.prepare(`INSERT INTO players (id, name, appearance, level) VALUES (?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET name = ?, appearance = ?`).bind(userId, name, appearance, name, appearance).run(); })());
           return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: `Name: **${name}**\nAppearance: *${appearance}*\n\n**Step 2: What is your defining trait?**`, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Insomnia", custom_id: "trait_Insomnia" }, { type: 2, style: 1, label: "Night Owl", custom_id: "trait_NightOwl" }, { type: 2, style: 1, label: "Mysterious", custom_id: "trait_Mysterious" }]}] } }), { headers: { 'Content-Type': 'application/json' } });
         }
-        if (interaction.data.custom_id === 'game_stargaze_modal') {
+               if (interaction.data.custom_id === 'game_stargaze_modal') {
           const constellationName = interaction.data.components[0].components[0].value;
           ctx.waitUntil((async () => {
-            let legend = "It reminds you of a forgotten promise.";
+            const fallbackLegends = [
+              "It reminds you of a promise no one kept.",
+              "A story lost to the neon lights below.",
+              "A quiet place where the lonely gather.",
+              "It looks like a map to somewhere you've never been."
+            ];
+            let legend = fallbackLegends[Math.floor(Math.random() * fallbackLegends.length)];
+            
             try {
               const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                   model: 'openai/gpt-oss-20b', 
-                  messages: [{ role: 'system', content: `You are Nazuna. The player just named a constellation "${constellationName}". Write a short, melancholic 2-sentence legend about this star.` }], 
+                  messages: [{ role: 'system', content: `You are Nazuna. The player named a constellation "${constellationName}". Write a 2-sentence legend.` }], 
                   max_tokens: 150 
                 })
               });
               const aiData: any = await aiRes.json();
-              if (aiData.choices && aiData.choices[0].message.content) legend = aiData.choices[0].message.content;
+              if (aiData.choices && aiData.choices[0].message.content) {
+                 const aiText = aiData.choices[0].message.content.trim().replace(/^"|"$/g, '');
+                 if (aiText.length > 5) { legend = aiText; }
+              }
             } catch (e) {}
-
+            
             await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
             const levelResult = await processLevelUp(env, userId);
             let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
-
-            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                content: `✨ **Stargazing**\nYou point at the sky. *"That one is called ${constellationName}."*\n\n> ${legend}\n\n**(+50 XP)**${extraMsg}`,
-                components: []
-              })
+            
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { 
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify({ content: `✨ **Stargazing**\nYou point at the sky. *"That one is called ${constellationName}."*\n\n> ${legend}\n\n**(+50 XP)**${extraMsg}`, components: [] }) 
             });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        }
         }
         const modalId = interaction.data.custom_id;
         if (['modal_nazuna', 'modal_kou', 'modal_akira', 'modal_anko'].includes(modalId)) {
