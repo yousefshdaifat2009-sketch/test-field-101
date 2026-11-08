@@ -10,7 +10,6 @@ export interface Env {
   DB: D1Database;
 }
 
-// --- HARDCODED MINI-GAME DATA (Guarantees it never breaks) ---
 const KARAOKE_SONGS = [
   { lyric: "The moon is high, the night is ____", correct: "young", wrong1: "cold", wrong2: "over" },
   { lyric: "I can't sleep, I'm falling for the ____", correct: "dark", wrong1: "sun", wrong2: "clock" },
@@ -45,7 +44,7 @@ export default {
           { name: 'cases', description: 'View your active cases', type: 1 },
           { name: 'notebook', description: 'View your collected clues', type: 1 },
           { name: 'bonds', description: 'View your relationships with NPCs', type: 1 },
-          { name: 'play', description: 'Play peaceful mini-games with NPCs or players', type: 1 },
+          { name: 'play', description: 'Play peaceful mini-games', type: 1 },
           { name: 'duel', description: 'Duel another player in PvP', type: 1, options: [{ name: 'user', description: 'The player to duel', type: 6, required: true }] },
           { 
             name: 'admin', description: 'Owner commands', type: 1,
@@ -115,10 +114,7 @@ export default {
                method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
                  content: `⚔️ **DUEL CHALLENGE** ⚔️\n<@${targetId}>, <@${userId}> has challenged you to a duel!\nDo you accept?`,
-                 components: [{ type: 1, components: [
-                   { type: 2, style: 3, label: "Accept", custom_id: `duel_accept_${userId}` },
-                   { type: 2, style: 4, label: "Decline", custom_id: "duel_decline" }
-                 ]}]
+                 components: [{ type: 1, components: [{ type: 2, style: 3, label: "Accept", custom_id: `duel_accept_${userId}` }, { type: 2, style: 4, label: "Decline", custom_id: "duel_decline" }] }]
                })
              });
              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'DELETE' });
@@ -127,21 +123,17 @@ export default {
         }
 
         if (interaction.data.name === 'admin') {
-          if (userId !== env.OWNER_DISCORD_ID) {
-            return new Response(JSON.stringify({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: "❌ You are not the owner.", flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
-          }
-          const subcommand = interaction.data.options[0].name;
+          if (userId !== env.OWNER_DISCORD_ID) return new Response(JSON.stringify({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: "❌ You are not the owner.", flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
           
+          const subcommand = interaction.data.options[0].name;
           if (subcommand === 'stats') {
             ctx.waitUntil((async () => {
               const today = new Date().toISOString().split('T')[0];
               const usage: any = await env.DB.prepare('SELECT count FROM ai_usage WHERE date = ?').bind(today).first();
-              const count = usage ? usage.count : 0;
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**AI Usage Today:** ${count} / 900 calls.` }) });
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**AI Usage Today:** ${usage ? usage.count : 0} / 900 calls.` }) });
             })());
             return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
           }
-
           if (subcommand === 'grantxp') {
             const targetUser = interaction.data.options[0].options[0].value;
             const amount = interaction.data.options[0].options[1].value;
@@ -154,7 +146,6 @@ export default {
             })());
             return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
           }
-
           if (subcommand === 'reset') {
             const targetUser = interaction.data.options[0].options[0].value;
             ctx.waitUntil((async () => {
@@ -163,11 +154,11 @@ export default {
               await env.DB.prepare('DELETE FROM npc_bonds WHERE player_id = ?').bind(targetUser).run();
               await env.DB.prepare('DELETE FROM player_npcs_met WHERE player_id = ?').bind(targetUser).run();
               await env.DB.prepare('DELETE FROM infinite_quests WHERE player_id = ?').bind(targetUser).run();
+              await env.DB.prepare('DELETE FROM active_games WHERE user_id = ?').bind(targetUser).run();
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `✅ Reset all data for <@${targetUser}>.` }) });
             })());
             return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
           }
-
           if (subcommand === 'boss') {
             const targetUser = interaction.data.options[0].options[0].value;
             ctx.waitUntil((async () => {
@@ -176,16 +167,11 @@ export default {
                const bossMaxHp = 50 + (pLevel * 10);
                
                let introDialogue = "A cold wind blows through the abandoned warehouse. The Rogue Vampire steps out of the shadows, its eyes glowing red.";
-               let bossTaunt = "You've wandered too deep into the night, human.";
                try {
-                 const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                   method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                   body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: 'You are a Rogue Vampire in Call of the Night. Write one intimidating, short sentence to a player who just confronted you.' }], max_tokens: 100 })
-                 });
+                 const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: 'You are a Rogue Vampire in Call of the Night. Write one intimidating, short sentence to a player who just confronted you.' }], max_tokens: 100 }) });
                  const aiData: any = await aiRes.json();
-                 if (aiData.choices && aiData.choices[0].message.content) bossTaunt = aiData.choices[0].message.content;
+                 if (aiData.choices && aiData.choices[0].message.content) introDialogue += `\n> *"${aiData.choices[0].message.content}"*`;
                } catch(e) {}
-               introDialogue += `\n> *"${bossTaunt}"*`;
 
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
                await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials, round) VALUES (?, ?, 100, ?, ?, ?, 2, 2, 1)').bind(interaction.channel_id, targetUser, "rogue_vampire", bossMaxHp, targetUser).run();
@@ -194,15 +180,7 @@ export default {
                
                await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
                  method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ 
-                   embeds: [embed],
-                   components: [{ type: 1, components: [
-                     { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
-                     { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
-                     { type: 2, style: 3, label: "Special (2 Left)", custom_id: "combat_special" },
-                     { type: 2, style: 4, label: "Flee", custom_id: "combat_flee" }
-                   ]}]
-                 })
+                 body: JSON.stringify({ embeds: [embed], components: [{ type: 1, components: [{ type: 2, style: 1, label: "Attack", custom_id: "combat_attack" }, { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" }, { type: 2, style: 3, label: "Special (2 Left)", custom_id: "combat_special" }, { type: 2, style: 4, label: "Flee", custom_id: "combat_flee" }]}] })
                });
                await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "Boss spawned." }) });
             })());
@@ -320,13 +298,7 @@ export default {
               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You already have a character. Use `/sheet` to view it." }) });
               return;
             }
-            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                content: "Welcome to the night city. Are you ready to create your character?",
-                components: [{ type: 1, components: [{ type: 2, style: 1, label: "Begin", custom_id: "start_create" }] }]
-              })
-            });
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "Welcome to the night city. Are you ready to create your character?", components: [{ type: 1, components: [{ type: 2, style: 1, label: "Begin", custom_id: "start_create" }] }] }) });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL } }), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -347,32 +319,18 @@ export default {
           }
           locations.push({ type: 2, style: 1, label: "Your Apartment", custom_id: "go_apartment" });
           const components = [];
-          for (let i = 0; i < locations.length; i += 5) {
-            components.push({ type: 1, components: locations.slice(i, i + 5) });
-          }
-          return new Response(JSON.stringify({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { flags: InteractionResponseFlags.EPHEMERAL, content: `**It is currently ${phaseText} in Tokyo.**\nWhere do you want to go?`, components: components }
-          }), { headers: { 'Content-Type': 'application/json' } });
+          for (let i = 0; i < locations.length; i += 5) { components.push({ type: 1, components: locations.slice(i, i + 5) }); }
+          return new Response(JSON.stringify({ type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, data: { flags: InteractionResponseFlags.EPHEMERAL, content: `**It is currently ${phaseText} in Tokyo.**\nWhere do you want to go?`, components: components } }), { headers: { 'Content-Type': 'application/json' } });
         }
       }
 
       // --- BUTTONS ---
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
-                // --- MINI-GAMES ---
+
+        // --- MINI-GAMES ---
         if (cid === 'game_td_start') {
-          return new Response(JSON.stringify({
-            type: InteractionResponseType.UPDATE_MESSAGE,
-            data: {
-              content: "🎲 **Truth or Dare**\nYou sit on the rooftop with Nazuna. She smirks at you.\n\n*'Truth or Dare?'*",
-              components: [{ type: 1, components: [
-                { type: 2, style: 1, label: "Truth", custom_id: "game_td_truth" },
-                { type: 2, style: 3, label: "Dare", custom_id: "game_td_dare" },
-                { type: 2, style: 4, label: "Quit", custom_id: "game_quit" }
-              ]}]
-            }
-          }), { headers: { 'Content-Type': 'application/json' } });
+          return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: "🎲 **Truth or Dare**\nYou sit on the rooftop with Nazuna. She smirks at you.\n\n*'Truth or Dare?'*", components: [{ type: 1, components: [{ type: 2, style: 1, label: "Truth", custom_id: "game_td_truth" }, { type: 2, style: 3, label: "Dare", custom_id: "game_td_dare" }, { type: 2, style: 4, label: "Quit", custom_id: "game_quit" }]}] } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid === 'game_td_truth' || cid === 'game_td_dare') {
@@ -380,47 +338,25 @@ export default {
           ctx.waitUntil((async () => {
             let prompt = isTruth ? "What is the biggest lie you've told to hide your nighttime activities?" : "Change your Discord nickname to 'Vampire Bait' for one hour.";
             try {
-              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  model: 'openai/gpt-oss-20b', 
-                  messages: [{ role: 'system', content: isTruth ? 'You are Nazuna Nanakusa. Ask the player one deep, melancholic, or slightly embarrassing "Truth" question related to the night or their character.' : 'You are Nazuna Nanakusa. Give the player one playful, harmless "Dare" they have to do in the Discord server.' }], 
-                  max_tokens: 100 
-                })
-              });
+              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: isTruth ? 'You are Nazuna Nanakusa. Ask a deep, melancholic "Truth" question (max 15 words) for a game.' : 'You are Nazuna. Give a safe, PG-13 Discord "Dare" (max 15 words) for a game.' }], max_tokens: 100 }) });
               const aiData: any = await aiRes.json();
               if (aiData.choices && aiData.choices[0].message.content) {
                 const aiText = aiData.choices[0].message.content.trim().replace(/^"|"$/g, '');
                 if (aiText.length > 5) { prompt = aiText; }
               }
             } catch (e) {}
-
-            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                content: `🎲 **Truth or Dare**\nNazuna leans in close.\n\n> *"${prompt}"*`,
-                components: [{ type: 1, components: [{ type: 2, style: 3, label: "I Accept", custom_id: "game_td_accept" }, { type: 2, style: 4, label: "Quit", custom_id: "game_quit" }]}] 
-              })
-            });
+            await env.DB.prepare(`INSERT INTO active_games (user_id, prompt) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET prompt = ?`).bind(userId, prompt, prompt).run();
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🎲 **Truth or Dare**\nNazuna leans in close.\n\n> *"${prompt}"*`, components: [{ type: 1, components: [{ type: 2, style: 3, label: "Answer", custom_id: "game_td_answer" }, { type: 2, style: 4, label: "Quit", custom_id: "game_quit" }]}] }) });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        if (cid === 'game_td_accept') {
-          ctx.waitUntil((async () => {
-            await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
-            const levelResult = await processLevelUp(env, userId);
-            let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
-            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ content: `Nazuna laughs. *"You actually did it. Brave."*\n\n**(+50 XP)**${extraMsg}`, components: [] })
-            });
-          })());
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        if (cid === 'game_td_answer') {
+          return new Response(JSON.stringify({ type: InteractionResponseType.MODAL, data: { custom_id: 'game_td_answer_modal', title: 'Your Answer', components: [{ type: 1, components: [{ type: 4, custom_id: 'answer', label: 'Type your answer here', style: 2, min_length: 2, max_length: 500, required: true }] }] } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid === 'game_stargaze_start') {
-          return new Response(JSON.stringify({ type: InteractionResponseType.MODAL, data: { custom_id: 'game_stargaze_modal', title: 'Stargazing', components: [{ type: 1, components: [{ type: 4, custom_id: 'constellation', label: 'What do you see?', style: 2, min_length: 3, max_length: 100, required: true }] }] } }), { headers: { 'Content-Type': 'application/json' } });
+          return new Response(JSON.stringify({ type: InteractionResponseType.MODAL, data: { custom_id: 'game_stargaze_modal', title: 'Stargazing', components: [{ type: 1, components: [{ type: 4, custom_id: 'constellation', label: 'What do you see in the stars?', style: 2, min_length: 3, max_length: 100, required: true }] }] } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid === 'game_karaoke_start') {
@@ -470,143 +406,66 @@ export default {
           ctx.waitUntil((async () => {
              await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE channel_id = ?').bind(interaction.channel_id).run();
              await env.DB.prepare('INSERT INTO combat_sessions (channel_id, p1_id, p1_hp, p2_id, p2_hp, turn_id, p1_specials, p2_specials, round) VALUES (?, ?, 100, ?, 100, ?, 2, 2, 1)').bind(interaction.channel_id, p1Id, p2Id, p1Id).run();
-             
              const embed = createCombatEmbed(p1Id, 100, 100, "Player 2", 100, 100, `⚔️ **PvP DUEL STARTED** ⚔️\n\n👉 **<@${p1Id}>, it is your turn!**`, 1, true);
-             
-             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ 
-                 embeds: [embed],
-                 components: [{ type: 1, components: [
-                   { type: 2, style: 1, label: "Strike", custom_id: "pvp_attack" },
-                   { type: 2, style: 2, label: "Guard", custom_id: "pvp_defend" },
-                   { type: 2, style: 3, label: "Taunt", custom_id: "pvp_taunt" },
-                   { type: 2, style: 4, label: "Ability", custom_id: "pvp_special" }
-                 ]}]
-               })
-             });
+             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ embeds: [embed], components: [{ type: 1, components: [{ type: 2, style: 1, label: "Strike", custom_id: "pvp_attack" }, { type: 2, style: 2, label: "Guard", custom_id: "pvp_defend" }, { type: 2, style: 3, label: "Taunt", custom_id: "pvp_taunt" }, { type: 2, style: 4, label: "Ability", custom_id: "pvp_special" }]}] }) });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        if (cid === 'duel_decline') {
-          return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: "Duel declined.", components: [] } }), { headers: { 'Content-Type': 'application/json' } });
-        }
+        if (cid === 'duel_decline') return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: "Duel declined.", components: [] } }), { headers: { 'Content-Type': 'application/json' } });
 
         if (cid === 'pvp_attack' || cid === 'pvp_defend' || cid === 'pvp_taunt' || cid === 'pvp_special') {
           ctx.waitUntil((async () => {
              const session: any = await env.DB.prepare('SELECT * FROM combat_sessions WHERE channel_id = ? AND status = "active" ORDER BY id DESC LIMIT 1').bind(interaction.channel_id).first();
              if (!session) return;
-             if (userId !== session.turn_id) {
-               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "It is not your turn.", flags: InteractionResponseFlags.EPHEMERAL }) });
-               return;
-             }
+             if (userId !== session.turn_id) return fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "It is not your turn.", flags: InteractionResponseFlags.EPHEMERAL }) });
 
              const isP1 = userId === session.p1_id;
              const opponentId = isP1 ? session.p2_id : session.p1_id;
-             
              const pData: any = await env.DB.prepare('SELECT level, stats FROM players WHERE id = ?').bind(userId).first();
              const oppData: any = await env.DB.prepare('SELECT level, stats FROM players WHERE id = ?').bind(opponentId).first();
-             
              const pLevel = pData ? Number(pData.level) : 1;
              const oppLevel = oppData ? Number(oppData.level) : 1;
-             
-             const pNerve = parseStat(pData?.stats, "Nerve");
-             const pMystery = parseStat(pData?.stats, "Mystery");
-             const pCharm = parseStat(pData?.stats, "Charm");
-             const pEmpathy = parseStat(pData?.stats, "Empathy");
+             const pNerve = parseStat(pData?.stats, "Nerve"), pMystery = parseStat(pData?.stats, "Mystery"), pCharm = parseStat(pData?.stats, "Charm"), pEmpathy = parseStat(pData?.stats, "Empathy");
 
-             let p1Hp = Number(session.p1_hp);
-             let p2Hp = Number(session.p2_hp);
-             let p1Specials = Number(session.p1_specials);
-             let p2Specials = Number(session.p2_specials);
-             let round = Number(session.round);
-
-             let pDmg = 0;
-             let actionMsg = "";
-             let selfHeal = 0;
+             let p1Hp = Number(session.p1_hp), p2Hp = Number(session.p2_hp), p1Specials = Number(session.p1_specials), p2Specials = Number(session.p2_specials), round = Number(session.round);
+             let pDmg = 0, actionMsg = "", selfHeal = 0;
 
              if (cid === 'pvp_attack') {
                pDmg = Math.floor(Math.random() * 10) + 10 + (pNerve * 2);
                if (Math.random() < (0.1 + (pMystery * 0.05))) { pDmg *= 2; actionMsg = `⚔️ **CRITICAL STRIKE!** <@${userId}> hits for **${pDmg}** damage!`; }
                else actionMsg = `⚔️ <@${userId}> strikes for **${pDmg}** damage.`;
-             } 
-             else if (cid === 'pvp_defend') {
+             } else if (cid === 'pvp_defend') {
                selfHeal = 10 + (pEmpathy * 3);
                actionMsg = `🛡️ <@${userId}> guards, recovering **${selfHeal}** HP.`;
-             }
-             else if (cid === 'pvp_taunt') {
-               if (p1Specials > 0) {
-                 if (isP1) p1Specials--; else p2Specials--;
-                 actionMsg = `🗣️ <@${userId}> taunts the enemy, lowering their next attack by **${20 + (pCharm * 5)}%**!`;
-               } else {
-                 actionMsg = `🗣️ <@${userId}> tries to taunt, but is out of breath.`;
-               }
-             }
-             else if (cid === 'pvp_special') {
-               if (isP1 ? p1Specials <= 0 : p2Specials <= 0) {
-                 await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You are out of Special uses!", flags: InteractionResponseFlags.EPHEMERAL }) });
-                 return;
-               }
+             } else if (cid === 'pvp_taunt') {
+               if (p1Specials > 0) { if (isP1) p1Specials--; else p2Specials--; actionMsg = `🗣️ <@${userId}> taunts the enemy, lowering their next attack by **${20 + (pCharm * 5)}%**!`; }
+               else actionMsg = `🗣️ <@${userId}> tries to taunt, but is out of breath.`;
+             } else if (cid === 'pvp_special') {
+               if (isP1 ? p1Specials <= 0 : p2Specials <= 0) return fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You are out of Special uses!", flags: InteractionResponseFlags.EPHEMERAL }) });
                if (isP1) p1Specials--; else p2Specials--;
-               
                const trackData: any = await env.DB.prepare('SELECT track FROM players WHERE id = ?').bind(userId).first();
-               if (trackData && trackData.track === 'Vampire Offspring') {
-                 pDmg = 20 + pLevel;
-                 selfHeal = 20 + pLevel;
-                 actionMsg = `🩸 <@${userId}> uses **Blood Drain**! Deals **${pDmg}** damage and heals **${selfHeal}** HP!`;
-               } else {
-                 pDmg = 40 + (pNerve * 2);
-                 actionMsg = `✨ <@${userId}> uses **Stake Throw**! Deals massive **${pDmg}** damage!`;
-               }
+               if (trackData && trackData.track === 'Vampire Offspring') { pDmg = 20 + pLevel; selfHeal = 20 + pLevel; actionMsg = `🩸 <@${userId}> uses **Blood Drain**! Deals **${pDmg}** damage and heals **${selfHeal}** HP!`; }
+               else { pDmg = 40 + (pNerve * 2); actionMsg = `✨ <@${userId}> uses **Stake Throw**! Deals massive **${pDmg}** damage!`; }
              }
 
-             if (isP1) {
-               p2Hp -= pDmg;
-               p1Hp = Math.min(100, p1Hp + selfHeal);
-             } else {
-               p1Hp -= pDmg;
-               p2Hp = Math.min(100, p2Hp + selfHeal);
-             }
+             if (isP1) { p2Hp -= pDmg; p1Hp = Math.min(100, p1Hp + selfHeal); } else { p1Hp -= pDmg; p2Hp = Math.min(100, p2Hp + selfHeal); }
 
              if (p1Hp <= 0 || p2Hp <= 0) {
                const winnerId = p1Hp > 0 ? session.p1_id : session.p2_id;
-               const loserId = p1Hp <= 0 ? session.p1_id : session.p2_id;
-               
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
-               
                const xpGain = oppLevel * 20;
                await env.DB.prepare('UPDATE players SET xp = xp + ? WHERE id = ?').bind(xpGain, winnerId).run();
                await processLevelUp(env, winnerId);
-
-               const winMsg = `\n\n🏆 **<@${winnerId}> WINS THE DUEL!**\n*Rewards:* +${xpGain} XP`;
-               const finalEmbed = createCombatEmbed(session.p1_id, Math.max(0, p1Hp), 100, `<@${session.p2_id}>`, Math.max(0, p2Hp), 100, `${actionMsg}${winMsg}`, round, true);
-               
-               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ embeds: [finalEmbed], components: [] })
-               });
-               return;
+               const finalEmbed = createCombatEmbed(session.p1_id, Math.max(0, p1Hp), 100, `<@${session.p2_id}>`, Math.max(0, p2Hp), 100, `${actionMsg}\n\n🏆 **<@${winnerId}> WINS THE DUEL!**\n*Rewards:* +${xpGain} XP`, round, true);
+               return fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ embeds: [finalEmbed], components: [] }) });
              }
 
              const nextTurn = isP1 ? session.p2_id : session.p1_id;
              round++;
              await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ?, p2_hp = ?, p1_specials = ?, p2_specials = ?, turn_id = ?, round = ? WHERE id = ?').bind(p1Hp, p2Hp, p1Specials, p2Specials, nextTurn, round, session.id).run();
-
              const nextEmbed = createCombatEmbed(session.p1_id, p1Hp, 100, `<@${session.p2_id}>`, p2Hp, 100, `${actionMsg}\n\n👉 **<@${nextTurn}>, it is your turn!**`, round, true);
-             
-             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ 
-                 embeds: [nextEmbed],
-                 components: [{ type: 1, components: [
-                   { type: 2, style: 1, label: "Strike", custom_id: "pvp_attack" },
-                   { type: 2, style: 2, label: "Guard", custom_id: "pvp_defend" },
-                   { type: 2, style: 3, label: "Taunt", custom_id: "pvp_taunt" },
-                   { type: 2, style: 4, label: "Ability", custom_id: "pvp_special" }
-                 ]}]
-               })
-             });
+             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ embeds: [nextEmbed], components: [{ type: 1, components: [{ type: 2, style: 1, label: "Strike", custom_id: "pvp_attack" }, { type: 2, style: 2, label: "Guard", custom_id: "pvp_defend" }, { type: 2, style: 3, label: "Taunt", custom_id: "pvp_taunt" }, { type: 2, style: 4, label: "Ability", custom_id: "pvp_special" }]}] }) });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -614,35 +473,19 @@ export default {
         if (cid === 'combat_flee') {
           ctx.waitUntil((async () => {
              const session: any = await env.DB.prepare('SELECT * FROM combat_sessions WHERE channel_id = ? AND status = "active" ORDER BY id DESC LIMIT 1').bind(interaction.channel_id).first();
-             if (!session) return;
-             if (userId !== session.turn_id) return;
-
+             if (!session || userId !== session.turn_id) return;
              if (Math.random() < 0.5) {
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
-               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ content: `🏃 **You successfully fled the battle!**\nYou escape into the night.`, embeds: [], components: [] })
-               });
+               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🏃 **You successfully fled the battle!**\nYou escape into the night.`, embeds: [], components: [] }) });
              } else {
                const p1Hp = Number(session.p1_hp) - 20;
                if (p1Hp <= 0) {
                   await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
-                  await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ content: `💀 **You failed to escape!**\nThe Vampire strikes you down from behind.`, embeds: [], components: [] })
-                  });
+                  await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `💀 **You failed to escape!**\nThe Vampire strikes you down from behind.`, embeds: [], components: [] }) });
                } else {
                   await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ? WHERE id = ?').bind(p1Hp, session.id).run();
                   const embed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", session.p2_hp, session.p2_hp, `🏃 **Failed to flee!**\nThe Vampire blocks your path and strikes you for **20 damage**.\n\n👉 **<@${userId}>, it is your turn!**`, session.round, false);
-                  await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ embeds: [embed], components: [{ type: 1, components: [
-                      { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
-                      { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
-                      { type: 2, style: 3, label: `Special (${session.p1_specials} Left)`, custom_id: "combat_special" },
-                      { type: 2, style: 4, label: "Flee", custom_id: "combat_flee" }
-                    ]}] })
-                  });
+                  await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ embeds: [embed], components: [{ type: 1, components: [{ type: 2, style: 1, label: "Attack", custom_id: "combat_attack" }, { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" }, { type: 2, style: 3, label: `Special (${session.p1_specials} Left)`, custom_id: "combat_special" }, { type: 2, style: 4, label: "Flee", custom_id: "combat_flee" }]}] }) });
                }
              }
           })());
@@ -652,146 +495,55 @@ export default {
         if (cid === 'combat_attack' || cid === 'combat_special' || cid === 'combat_defend') {
           ctx.waitUntil((async () => {
              const session: any = await env.DB.prepare('SELECT * FROM combat_sessions WHERE channel_id = ? AND status = "active" ORDER BY id DESC LIMIT 1').bind(interaction.channel_id).first();
-             if (!session) return;
-             if (userId !== session.turn_id) {
-               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "It is not your turn.", flags: InteractionResponseFlags.EPHEMERAL }) });
-               return;
-             }
+             if (!session || userId !== session.turn_id) return;
 
              const playerData: any = await env.DB.prepare('SELECT level FROM players WHERE id = ?').bind(userId).first();
              const pLevel = playerData ? Number(playerData.level) : 1;
-
-             let p1Hp = Number(session.p1_hp);
-             let p2Hp = Number(session.p2_hp);
-             let p1Specials = Number(session.p1_specials);
-             let p2Specials = Number(session.p2_specials);
-             let round = Number(session.round) + 1;
-
-             let pDmg = 0;
-             let pActionMsg = "";
-             let pDefending = false;
-             let isCrit = false;
-
-             let isDesperate = p1Hp < 25;
+             let p1Hp = Number(session.p1_hp), p2Hp = Number(session.p2_hp), p1Specials = Number(session.p1_specials), p2Specials = Number(session.p2_specials), round = Number(session.round) + 1;
+             let pDmg = 0, pActionMsg = "", pDefending = false, isDesperate = p1Hp < 25;
 
              if (cid === 'combat_attack') {
                pDmg = Math.floor(Math.random() * 10) + 15 + pLevel;
-               if (Math.random() < 0.15) { pDmg *= 2; isCrit = true; }
+               if (Math.random() < 0.15) pDmg *= 2;
                if (isDesperate) pDmg = Math.floor(pDmg * 1.5);
-               pActionMsg = isCrit ? `⚔️ **CRITICAL HIT!** <@${userId}> strikes a vital point for **${pDmg}** damage!` : `⚔️ <@${userId}> attacks for **${pDmg}** damage.`;
-               if (isDesperate && !isCrit) pActionMsg += ` *(Adrenaline Rush!)*`;
+               pActionMsg = `⚔️ <@${userId}> attacks for **${pDmg}** damage.`;
              } else if (cid === 'combat_defend') {
-               pDefending = true;
-               p1Hp = Math.min(100, p1Hp + 15);
+               pDefending = true; p1Hp = Math.min(100, p1Hp + 15);
                pActionMsg = `🛡️ <@${userId}> takes a defensive stance and recovers 15 HP.`;
              } else if (cid === 'combat_special') {
-               if (p1Specials <= 0) {
-                  await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You are out of Special uses!", flags: InteractionResponseFlags.EPHEMERAL }) });
-                  return;
-               }
-               p1Specials--;
-               pDmg = 40 + pLevel;
+               if (p1Specials <= 0) return;
+               p1Specials--; pDmg = 40 + pLevel;
                if (isDesperate) pDmg = Math.floor(pDmg * 1.5);
                pActionMsg = `✨ <@${userId}> unleashes their Special Ability for massive **${pDmg}** damage!`;
              }
 
              p2Hp -= pDmg;
-
              const thinkingEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 10), `${pActionMsg}\n\n⏳ **The enemy is calculating its move...**`, round, false);
-             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ embeds: [thinkingEmbed], components: [] })
-             });
+             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ embeds: [thinkingEmbed], components: [] }) });
 
-             let bossMsg = "";
-             let bossDmg = 0;
+             let bossMsg = "", bossDmg = 0;
              if (p2Hp > 0 && session.p2_id === 'rogue_vampire') {
                await new Promise(r => setTimeout(r, 2500));
-
                const bossMove = Math.random();
-               
-               if (bossMove < 0.6) {
-                 bossDmg = Math.floor(Math.random() * 5) + 8 + Math.floor(pLevel * 0.5);
-                 bossMsg = `🩸 The Vampire lunges with unnatural speed, tearing into you for **${bossDmg}** damage!`;
-               } else if (bossMove < 0.8) {
-                 bossMsg = `🛡️ The Vampire dissolves into shadows, avoiding damage and recovering its strength.`;
-                 p2Hp = Math.min(150 + (pLevel * 10), p2Hp + 15);
-               } else {
-                 if (p2Specials > 0) {
-                   p2Specials--;
-                   bossDmg = 15 + pLevel;
-                   bossMsg = `🦇 The Vampire vanishes and reappears behind you, using **Shadow Strike** for **${bossDmg}** damage!`;
-                 } else {
-                   bossDmg = Math.floor(Math.random() * 5) + 8 + Math.floor(pLevel * 0.5);
-                   bossMsg = `🩸 The Vampire strikes for **${bossDmg}** damage!`;
-                 }
-               }
-
-               if (pDefending) {
-                 bossDmg = Math.floor(bossDmg / 2);
-                 bossMsg += "\n*(Your defense halved the damage!)*";
-               }
-               if (cid !== 'combat_defend') {
-                 bossDmg = Math.floor(bossDmg * 1.5);
-                 bossMsg += "\n*(You left yourself open!)*";
-               }
-
+               if (bossMove < 0.6) { bossDmg = Math.floor(Math.random() * 5) + 8 + Math.floor(pLevel * 0.5); bossMsg = `🩸 The Vampire lunges with unnatural speed, tearing into you for **${bossDmg}** damage!`; }
+               else if (bossMove < 0.8) { bossMsg = `🛡️ The Vampire dissolves into shadows, avoiding damage.`; p2Hp = Math.min(150 + (pLevel * 10), p2Hp + 15); }
+               else { if (p2Specials > 0) { p2Specials--; bossDmg = 15 + pLevel; bossMsg = `🦇 The Vampire uses **Shadow Strike** for **${bossDmg}** damage!`; } else { bossDmg = Math.floor(Math.random() * 5) + 8 + Math.floor(pLevel * 0.5); bossMsg = `🩸 The Vampire strikes for **${bossDmg}** damage!`; } }
+               if (pDefending) bossDmg = Math.floor(bossDmg / 2);
+               if (cid !== 'combat_defend') bossDmg = Math.floor(bossDmg * 1.5);
                p1Hp -= bossDmg;
-
-               if (Math.random() < 0.6) {
-                 try {
-                   const tauntRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                     method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                     body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: 'You are a Rogue Vampire who just hit a player. Write one short, mocking sentence to them.' }], max_tokens: 50 })
-                   });
-                   const tauntData: any = await tauntRes.json();
-                   if (tauntData.choices && tauntData.choices[0].message.content) {
-                     bossMsg += `\n> *"${tauntData.choices[0].message.content}"*`;
-                   } else {
-                     bossMsg += `\n> *"Is that all you have?"*`;
-                   }
-                 } catch(e) {
-                   bossMsg += `\n> *"You bleed too easily."*`;
-                 }
-               }
              }
 
              if (p1Hp <= 0 || p2Hp <= 0) {
-               let winMsg = p1Hp <= 0 ? `💀 **You have been defeated.**\nYou wake up in your apartment with a throbbing headache.` : `🏆 **VICTORY!**\nThe Rogue Vampire turns to ash. You survived the night.`;
+               let winMsg = p1Hp <= 0 ? `💀 **You have been defeated.**\nYou wake up in your apartment.` : `🏆 **VICTORY!**\nThe Rogue Vampire turns to ash.`;
                await env.DB.prepare('UPDATE combat_sessions SET status = "finished" WHERE id = ?').bind(session.id).run();
-               
-               if (p1Hp > 0) {
-                 const xpGain = pLevel * 100;
-                 const yenGain = pLevel * 50;
-                 await env.DB.prepare('UPDATE players SET xp = xp + ? WHERE id = ?').bind(xpGain, userId).run();
-                 await processLevelUp(env, userId);
-                 winMsg += `\n\n**Loot:** +${xpGain} XP | +${yenGain} Yen`;
-               }
-
+               if (p1Hp > 0) { const xpGain = pLevel * 100; await env.DB.prepare('UPDATE players SET xp = xp + ? WHERE id = ?').bind(xpGain, userId).run(); await processLevelUp(env, userId); winMsg += `\n\n**Loot:** +${xpGain} XP`; }
                const finalEmbed = createCombatEmbed(userId, Math.max(0, p1Hp), 100, "Rogue Vampire", Math.max(0, p2Hp), 150 + (pLevel * 10), `${bossMsg}\n\n${winMsg}`, round, false);
-               await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ embeds: [finalEmbed], components: [] })
-               });
-               return;
+               return fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ embeds: [finalEmbed], components: [] }) });
              }
 
              await env.DB.prepare('UPDATE combat_sessions SET p1_hp = ?, p2_hp = ?, p1_specials = ?, p2_specials = ?, round = ? WHERE id = ?').bind(p1Hp, p2Hp, p1Specials, p2Specials, round, session.id).run();
-
              const nextEmbed = createCombatEmbed(userId, p1Hp, 100, "Rogue Vampire", p2Hp, 150 + (pLevel * 10), `${bossMsg}\n\n👉 **<@${userId}>, it is your turn!**`, round, false);
-             
-             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-               method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ 
-                 embeds: [nextEmbed],
-                 components: [{ type: 1, components: [
-                   { type: 2, style: 1, label: "Attack", custom_id: "combat_attack" },
-                   { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" },
-                   { type: 2, style: 3, label: `Special (${p1Specials} Left)`, custom_id: "combat_special" },
-                   { type: 2, style: 4, label: "Flee", custom_id: "combat_flee" }
-                 ]}]
-               })
-             });
+             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ embeds: [nextEmbed], components: [{ type: 1, components: [{ type: 2, style: 1, label: "Attack", custom_id: "combat_attack" }, { type: 2, style: 2, label: "Defend", custom_id: "combat_defend" }, { type: 2, style: 3, label: `Special (${p1Specials} Left)`, custom_id: "combat_special" }, { type: 2, style: 4, label: "Flee", custom_id: "combat_flee" }]}] }) });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -800,13 +552,8 @@ export default {
           ctx.waitUntil((async () => {
             let sireName = "Nazuna Nanakusa";
             let flavorText = "";
-            if (cid === 'sire_wildcard') {
-              const wildcards = ["Kiku Hoshimi", "Seri Kikyou", "Midori Kohakobe", "Kabura", "Hatsuka"];
-              sireName = wildcards[Math.floor(Math.random() * wildcards.length)];
-              flavorText = `A figure steps out of the shadows. You don't know them, but they seem to know you. "${sireName}," they say. "Remember it."`;
-            } else {
-              flavorText = `Nazuna smiles, her fangs catching the moonlight. "Alright. Let's see if you can handle the night."`;
-            }
+            if (cid === 'sire_wildcard') { const wildcards = ["Kiku Hoshimi", "Seri Kikyou", "Midori Kohakobe", "Kabura", "Hatsuka"]; sireName = wildcards[Math.floor(Math.random() * wildcards.length)]; flavorText = `A figure steps out of the shadows. You don't know them, but they seem to know you. "${sireName}," they say. "Remember it."`; }
+            else { flavorText = `Nazuna smiles, her fangs catching the moonlight. "Alright. Let's see if you can handle the night."`; }
             await env.DB.prepare(`UPDATE players SET track = 'Vampire Offspring' WHERE id = ?`).bind(userId).run();
             await env.DB.prepare(`UPDATE players SET stats = stats || ' | Sire: ' || ? WHERE id = ?`).bind(sireName, userId).run();
             await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🌙 **You are now an Offspring.**\n\nYour sire is **${sireName}**.\n\n${flavorText}`, components: [] }) });
@@ -901,17 +648,11 @@ export default {
               const lastInvestigation: any = await env.DB.prepare('SELECT created_at FROM infinite_quests WHERE player_id = ? AND location = ? ORDER BY created_at DESC LIMIT 1').bind(userId, location).first();
               if (lastInvestigation && lastInvestigation.created_at) {
                 const dateStr = lastInvestigation.created_at.replace(' ', 'T') + 'Z';
-                const lastTime = new Date(dateStr).getTime();
-                const now = new Date().getTime();
-                const hoursDiff = (now - lastTime) / (1000 * 60 * 60);
-                if (hoursDiff < 4) {
-                   await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You have already searched this area recently. The night is quiet here for now. *(4-hour cooldown)*" }) });
-                   return;
-                }
+                if (((new Date().getTime() - new Date(dateStr).getTime()) / (1000 * 60 * 60)) < 4) return fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "You have already searched this area recently. *(4-hour cooldown)*" }) });
               }
               const today = new Date().toISOString().split('T')[0];
               const usage: any = await env.DB.prepare('SELECT count FROM ai_usage WHERE date = ?').bind(today).first();
-              if (usage && usage.count >= 900) { await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "The night goes quiet. (Daily AI limit reached)." }) }); return; }
+              if (usage && usage.count >= 900) return fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: "The night goes quiet. (Daily AI limit reached)." }) });
               const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: `You are a mystery engine for Call of the Night. Create 3 physical clues (objects, smells, sounds) found while investigating a ${location}. Output ONLY valid JSON like this: {"clue1": "...", "clue2": "...", "clue3": "..."}. Do not use markdown formatting.` }], max_tokens: 1000 }) });
               const aiData: any = await aiRes.json();
               let rawText = aiData.choices[0].message.content.trim();
@@ -942,45 +683,47 @@ export default {
           const name = interaction.data.components[0].components[0].value;
           const appearance = interaction.data.components[1].components[0].value;
           ctx.waitUntil((async () => { await env.DB.prepare(`INSERT INTO players (id, name, appearance, level) VALUES (?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET name = ?, appearance = ?`).bind(userId, name, appearance, name, appearance).run(); })());
-          return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: `Name: **${name}**\nAppearance: *${appearance}*\n\n**Step 2: What is your defining trait?**`, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Insomnia", custom_id: "trait_Insomnia" }, { type: 2, style: 1, label: "Night Owl", custom_id: "trait_NightOwl" }, { type: 2, style: 1, label: "Mysterious", custom_id: "trait_Mysterious" }]}] } }), { headers: { 'Content-Type': 'application/json' } })                 
-                  if (interaction.data.custom_id === 'game_stargaze_modal') {
-          const constellationName = interaction.data.components[0].components[0].value;
+          return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: `Name: **${name}**\nAppearance: *${appearance}*\n\n**Step 2: What is your defining trait?**`, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Insomnia", custom_id: "trait_Insomnia" }, { type: 2, style: 1, label: "Night Owl", custom_id: "trait_NightOwl" }, { type: 2, style: 1, label: "Mysterious", custom_id: "trait_Mysterious" }]}] } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (interaction.data.custom_id === 'game_td_answer_modal') {
+          const answer = interaction.data.components[0].components[0].value;
           ctx.waitUntil((async () => {
-            const fallbackLegends = [
-              "It reminds you of a promise no one kept.",
-              "A story lost to the neon lights below.",
-              "A quiet place where the lonely gather.",
-              "It looks like a map to somewhere you've never been."
-            ];
-            let legend = fallbackLegends[Math.floor(Math.random() * fallbackLegends.length)];
-            
+            const gameData: any = await env.DB.prepare('SELECT prompt FROM active_games WHERE user_id = ?').bind(userId).first();
+            const prompt = gameData ? gameData.prompt : "The Truth or Dare prompt.";
+            let reaction = "Nazuna stares at you, unimpressed.";
             try {
-              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  model: 'openai/gpt-oss-20b', 
-                  messages: [{ role: 'system', content: `You are Nazuna. The player named a constellation "${constellationName}". Write a 2-sentence legend.` }], 
-                  max_tokens: 150 
-                })
-              });
+              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: `You are Nazuna Nanakusa. The player was asked "${prompt}" and they answered "${answer}". Write one short, teasing, or melancholic reaction sentence.` }], max_tokens: 100 }) });
               const aiData: any = await aiRes.json();
-              if (aiData.choices && aiData.choices[0].message.content) {
-                 const aiText = aiData.choices[0].message.content.trim().replace(/^"|"$/g, '');
-                 if (aiText.length > 5) { legend = aiText; }
-              }
-            } catch (e) {}
-            
+              if (aiData.choices && aiData.choices[0].message.content) { const aiText = aiData.choices[0].message.content.trim().replace(/^"|"$/g, ''); if (aiText.length > 5) reaction = aiText; }
+            } catch(e) {}
             await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
             const levelResult = await processLevelUp(env, userId);
             let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
-            
-            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { 
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, 
-              body: JSON.stringify({ content: `✨ **Stargazing**\nYou point at the sky. *"That one is called ${constellationName}."*\n\n> ${legend}\n\n**(+50 XP)**${extraMsg}`, components: [] }) 
-            });
+            await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🎲 **Truth or Dare**\n**Nazuna asked:** *"${prompt}"*\n**<@${userId}> answered:** *"${answer}"*\n\n> *"${reaction}"*\n\n**(+50 XP)**${extraMsg}` }) });
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'DELETE' });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
+
+        if (interaction.data.custom_id === 'game_stargaze_modal') {
+          const constellationName = interaction.data.components[0].components[0].value;
+          ctx.waitUntil((async () => {
+            const fallbackLegends = ["It reminds you of a promise no one kept.", "A story lost to the neon lights below.", "A quiet place where the lonely gather.", "It looks like a map to somewhere you've never been."];
+            let legend = fallbackLegends[Math.floor(Math.random() * fallbackLegends.length)];
+            try {
+              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: `You are Nazuna. The player named a constellation "${constellationName}". Write a 2-sentence legend.` }], max_tokens: 150 }) });
+              const aiData: any = await aiRes.json();
+              if (aiData.choices && aiData.choices[0].message.content) { const aiText = aiData.choices[0].message.content.trim().replace(/^"|"$/g, ''); if (aiText.length > 5) { legend = aiText; } }
+            } catch (e) {}
+            await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
+            const levelResult = await processLevelUp(env, userId);
+            let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `✨ **Stargazing**\nYou point at the sky. *"That one is called ${constellationName}."*\n\n> ${legend}\n\n**(+50 XP)**${extraMsg}`, components: [] }) });
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
         const modalId = interaction.data.custom_id;
         if (['modal_nazuna', 'modal_kou', 'modal_akira', 'modal_anko'].includes(modalId)) {
           const userMessage = interaction.data.components[0].components[0].value;
@@ -994,4 +737,88 @@ export default {
               const playerName = player ? player.name : "a stranger";
               let npcName = ""; let prompt = ""; let npcId = ""; let avatarUrl = "https://i.imgur.com/your_nazuna_image.png";
               if (modalId === 'modal_nazuna') { npcId = "nazuna"; npcName = "Nazuna Nanakusa"; prompt = `You are Nazuna Nanakusa from Call of the Night. You are a vampire. You are teasing, slightly sarcastic, but caring. You are talking to ${playerName}. Never break character. Keep responses to 1-3 sentences.`; }
-              else if (modalId === 'modal_kou') { npcId = "kou"; npcName = "Kou Yamori"; prompt = `You are Kou Yamori from Call of the Night. You are a human boy who can't sleep and wants to be a vampire. You are blunt, observant, and a bit awkward. You are talking to ${playerName}. Keep responses to 1
+              else if (modalId === 'modal_kou') { npcId = "kou"; npcName = "Kou Yamori"; prompt = `You are Kou Yamori from Call of the Night. You are a human boy who can't sleep and wants to be a vampire. You are blunt, observant, and a bit awkward. You are talking to ${playerName}. Keep responses to 1-3 sentences.`; }
+              else if (modalId === 'modal_akira') { npcId = "akira"; npcName = "Akira Asai"; prompt = `You are Akira Asai from Call of the Night. You are Kou's human friend. You are energetic, caring, and worried about Kou. You are talking to ${playerName}. Keep responses to 1-3 sentences.`; }
+              else if (modalId === 'modal_anko') { npcId = "anko"; npcName = "Anko Uguisu"; prompt = `You are Anko Uguisu from Call of the Night. You are a cynical vampire-hunting detective. You smoke, wear a trench coat, and are deeply traumatized. You are talking to ${playerName}. Keep responses to 1-3 sentences.`; }
+              await env.DB.prepare(`INSERT OR IGNORE INTO player_npcs_met (player_id, npc_id) VALUES (?, ?)`).bind(userId, npcId).run();
+              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages: [{ role: 'system', content: prompt }, { role: 'user', content: userMessage }], max_tokens: 1000 }) });
+              if (!aiRes.ok) throw new Error(`Groq API Error: ${await aiRes.text()}`);
+              const aiData: any = await aiRes.json();
+              const reply = aiData.choices[0].message.content;
+              await env.DB.prepare(`INSERT INTO ai_usage (date, count) VALUES (?, 1) ON CONFLICT(date) DO UPDATE SET count = count + 1`).bind(today).run();
+              const threadInfoRes = await fetch(`https://discord.com/api/v10/channels/${threadId}`, { headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` } });
+              const threadInfo: any = await threadInfoRes.json();
+              const parentChannelId = threadInfo.parent_id;
+              let webhookId = ""; let webhookToken = "";
+              const existingHooksRes = await fetch(`https://discord.com/api/v10/channels/${parentChannelId}/webhooks`, { headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}` } });
+              if (existingHooksRes.ok) { const existingHooks: any = await existingHooksRes.json(); const npcHook = existingHooks.find((h: any) => h.name === npcName); if (npcHook) { webhookId = npcHook.id; webhookToken = npcHook.token; } }
+              if (!webhookId) { const webhookRes = await fetch(`https://discord.com/api/v10/channels/${parentChannelId}/webhooks`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: npcName }) }); const webhookData: any = await webhookRes.json(); webhookId = webhookData.id; webhookToken = webhookData.token; }
+              await fetch(`https://discord.com/api/v10/webhooks/${webhookId}/${webhookToken}?thread_id=${threadId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: reply, username: npcName, avatar_url: avatarUrl }) });
+              if (player) {
+                await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
+                const levelResult = await processLevelUp(env, userId);
+                if (levelResult) {
+                  await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `✨ **Level Up!** ${playerName} is now Level ${levelResult.level}.` }) });
+                  if (levelResult.level === 5 && player.track !== 'Vampire Offspring') {
+                    const metCount: any = await env.DB.prepare('SELECT COUNT(*) as count FROM player_npcs_met WHERE player_id = ?').bind(userId).first();
+                    const clueCount: any = await env.DB.prepare('SELECT COUNT(*) as count FROM quests_progress WHERE player_id = ?').bind(userId).first();
+                    const infClueCount: any = await env.DB.prepare('SELECT COUNT(*) as count FROM infinite_quests WHERE player_id = ?').bind(userId).first();
+                    const totalClues = (clueCount?.count || 0) + (infClueCount?.count || 0);
+                    if (metCount.count >= 3 && totalClues >= 1) { await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🌙 **The night notices you.**\n\nYou have reached Level 5. It is time to choose your path. Will you become an Offspring?`, components: [{ type: 1, components: [{ type: 2, style: 3, label: "Choose Nazuna as Sire", custom_id: "sire_nazuna" }, { type: 2, style: 3, label: "Choose a Wildcard Sire", custom_id: "sire_wildcard" }] }] }) }); }
+                    else { await fetch(`https://discord.com/api/v10/channels/${threadId}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🌙 **The night notices you, but not yet.**\n\nYou reached Level 5, but to become an Offspring you must meet at least **3 NPCs** and find at least **1 Clue** in the city.` }) }); }
+                  }
+                }
+                const bond = await env.DB.prepare('SELECT points FROM npc_bonds WHERE player_id = ? AND npc_id = ?').bind(userId, npcId).first();
+                if (bond) await env.DB.prepare('UPDATE npc_bonds SET points = points + 1 WHERE player_id = ? AND npc_id = ?').bind(userId, npcId).run();
+                else await env.DB.prepare('INSERT INTO npc_bonds (player_id, npc_id, points) VALUES (?, ?, 1)').bind(userId, npcId).run();
+              }
+              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'DELETE' });
+            } catch (error: any) { await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `**Error:** ${error.message}` }) }); }
+          })());
+          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE }), { headers: { 'Content-Type': 'application/json' } });
+        }
+      }
+    }
+    return new Response('Not found', { status: 404 });
+  },
+
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const utcHour = new Date().getUTCHours();
+    const tokyoHour = (utcHour + 9) % 24;
+    let message = "";
+    if (tokyoHour === 18) message = "🌙 **The night begins.**\nThe city exhales. Somewhere, a door opens.";
+    else if (tokyoHour === 6) message = "☀️ **The sun rises.**\nThe night lets go — for now.";
+    if (message) { await fetch(`https://discord.com/api/v10/channels/${env.GAME_CHANNEL_ID}/messages`, { method: 'POST', headers: { 'Authorization': `Bot ${env.DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: message }) }); }
+  }
+};
+
+async function processLevelUp(env: Env, userId: string) {
+  const player: any = await env.DB.prepare('SELECT level, xp FROM players WHERE id = ?').bind(userId).first();
+  if (!player) return null;
+  let lvl = Number(player.level) || 1;
+  let xp = Number(player.xp) || 0;
+  let leveledUp = false;
+  while (xp >= (lvl * 100)) { xp -= (lvl * 100); lvl++; leveledUp = true; }
+  if (leveledUp) { await env.DB.prepare('UPDATE players SET level = ?, xp = ? WHERE id = ?').bind(lvl, xp, userId).run(); return { level: lvl, xp: xp }; }
+  return null;
+}
+
+function parseStat(statsStr: string | undefined, statName: string): number {
+  if (!statsStr) return 0;
+  const match = statsStr.match(new RegExp(statName + "\\s+(\\d+)", "i"));
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function createCombatEmbed(p1Id: string, p1Hp: number, p1MaxHp: number, p2Name: string, p2Hp: number, p2MaxHp: number, description: string, round: number, isPvp: boolean = false) {
+  const p1Prog = Math.max(0, Math.ceil((p1Hp / p1MaxHp) * 10));
+  const p1Bar = "🟩".repeat(p1Prog) + "⬛".repeat(10 - p1Prog);
+  const p2Prog = Math.max(0, Math.ceil((p2Hp / p2MaxHp) * 10));
+  const p2Bar = (isPvp ? "🟪" : "🟥").repeat(p2Prog) + "⬛".repeat(10 - p2Prog);
+  return {
+    title: isPvp ? `⚔️ PVP DUEL - Round ${round}` : `⚔️ BATTLE - Round ${round}`,
+    color: isPvp ? 0x8A2BE2 : 0x8B0000,
+    description: description,
+    fields: [{ name: `🧑 <@${p1Id}>`, value: `${p1Bar}\n**HP:** ${Math.max(0, p1Hp)} / ${p1MaxHp}`, inline: true }, { name: isPvp ? `🧑 ${p2Name}` : `🩸 ${p2Name}`, value: `${p2Bar}\n**HP:** ${Math.max(0, p2Hp)} / ${p2MaxHp}`, inline: true }],
+    footer: { text: "Call of the Night RPG" }
+  };
+}
