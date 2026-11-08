@@ -360,8 +360,7 @@ export default {
       // --- BUTTONS ---
       if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
         const cid = interaction.data.custom_id;
-
-        // --- MINI-GAMES ---
+                // --- MINI-GAMES ---
         if (cid === 'game_td_start') {
           return new Response(JSON.stringify({
             type: InteractionResponseType.UPDATE_MESSAGE,
@@ -376,9 +375,6 @@ export default {
           }), { headers: { 'Content-Type': 'application/json' } });
         }
 
-        
-          return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
-        }
         if (cid === 'game_td_truth' || cid === 'game_td_dare') {
           const isTruth = cid === 'game_td_truth';
           ctx.waitUntil((async () => {
@@ -409,6 +405,7 @@ export default {
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
+
         if (cid === 'game_td_accept') {
           ctx.waitUntil((async () => {
             await env.DB.prepare(`UPDATE players SET xp = xp + 50 WHERE id = ?`).bind(userId).run();
@@ -423,118 +420,41 @@ export default {
         }
 
         if (cid === 'game_stargaze_start') {
-          return new Response(JSON.stringify({ 
-            type: InteractionResponseType.MODAL, 
-            data: { 
-              custom_id: 'game_stargaze_modal', 
-              title: 'Stargazing', 
-              components: [{ type: 1, components: [{ type: 4, custom_id: 'constellation', label: 'What do you see in the stars?', style: 2, min_length: 3, max_length: 100, required: true }] }] 
-            } 
-          }), { headers: { 'Content-Type': 'application/json' } });
+          return new Response(JSON.stringify({ type: InteractionResponseType.MODAL, data: { custom_id: 'game_stargaze_modal', title: 'Stargazing', components: [{ type: 1, components: [{ type: 4, custom_id: 'constellation', label: 'What do you see?', style: 2, min_length: 3, max_length: 100, required: true }] }] } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid === 'game_karaoke_start') {
           const song = KARAOKE_SONGS[Math.floor(Math.random() * KARAOKE_SONGS.length)];
-          const options = [
-            { label: song.correct, id: "correct" },
-            { label: song.wrong1, id: "wrong" },
-            { label: song.wrong2, id: "wrong" }
-          ].sort(() => Math.random() - 0.5);
-
-          return new Response(JSON.stringify({
-            type: InteractionResponseType.UPDATE_MESSAGE,
-            data: {
-              content: `🎤 **Karaoke Night**\nSeri hands you the mic. *"Don't leave me hanging!"*\n\n*"${song.lyric}"*`,
-              components: [{ type: 1, components: options.map(o => ({ type: 2, style: 1, label: o.label, custom_id: `game_karaoke_ans_${o.id}` })) }]
-            }
-          }), { headers: { 'Content-Type': 'application/json' } });
+          const options = [{ label: song.correct, id: "correct" }, { label: song.wrong1, id: "wrong" }, { label: song.wrong2, id: "wrong" }].sort(() => Math.random() - 0.5);
+          return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: `🎤 **Karaoke Night**\nSeri hands you the mic. *"Don't leave me hanging!"*\n\n*"${song.lyric}"*`, components: [{ type: 1, components: options.map(o => ({ type: 2, style: 1, label: o.label, custom_id: `game_karaoke_ans_${o.id}` })) }] } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid.startsWith('game_karaoke_ans_')) {
           const isCorrect = cid.endsWith('correct');
           ctx.waitUntil((async () => {
-            let reaction = "";
-            try {
-              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  model: 'openai/gpt-oss-20b', 
-                  messages: [{ role: 'system', content: `You are Seri from Call of the Night. The player just ${isCorrect ? 'sang perfectly' : 'sang terribly'}. Write one short reaction sentence.` }], 
-                  max_tokens: 50 
-                })
-              });
-              const aiData: any = await aiRes.json();
-              if (aiData.choices && aiData.choices[0].message.content) reaction = aiData.choices[0].message.content;
-            } catch (e) {}
-            if (!reaction) reaction = isCorrect ? "Seri cheers! \"Perfect pitch!\"" : "Seri winces. \"Oof. That was rough.\"";
-
-            if (isCorrect) {
-              await env.DB.prepare(`UPDATE players SET xp = xp + 100 WHERE id = ?`).bind(userId).run();
-              const levelResult = await processLevelUp(env, userId);
-              let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: `🎤 **Karaoke Night**\n${reaction}\n\n**(+100 XP)**${extraMsg}`, components: [] })
-              });
-            } else {
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: `🎤 **Karaoke Night**\n${reaction}`, components: [] })
-              });
-            }
+            let reaction = isCorrect ? "Seri cheers! \"Perfect pitch!\"" : "Seri winces. \"Oof. That was rough.\"";
+            if (isCorrect) await env.DB.prepare(`UPDATE players SET xp = xp + 100 WHERE id = ?`).bind(userId).run();
+            const levelResult = isCorrect ? await processLevelUp(env, userId) : null;
+            let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🎤 **Karaoke Night**\n${reaction}${extraMsg}`, components: [] }) });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid === 'game_riddle_start') {
           const riddle = RIDDLES[Math.floor(Math.random() * RIDDLES.length)];
-          const options = [
-            { label: riddle.correct, id: "correct" },
-            { label: riddle.wrong1, id: "wrong" },
-            { label: riddle.wrong2, id: "wrong" }
-          ].sort(() => Math.random() - 0.5);
-
-          return new Response(JSON.stringify({
-            type: InteractionResponseType.UPDATE_MESSAGE,
-            data: {
-              content: `🕵️ **Anko's Riddle**\nAnko blows smoke in your face.\n\n*"${riddle.riddle}"*`,
-              components: [{ type: 1, components: options.map(o => ({ type: 2, style: 1, label: o.label, custom_id: `game_riddle_ans_${o.id}` })) }]
-            }
-          }), { headers: { 'Content-Type': 'application/json' } });
+          const options = [{ label: riddle.correct, id: "correct" }, { label: riddle.wrong1, id: "wrong" }, { label: riddle.wrong2, id: "wrong" }].sort(() => Math.random() - 0.5);
+          return new Response(JSON.stringify({ type: InteractionResponseType.UPDATE_MESSAGE, data: { content: `🕵️ **Anko's Riddle**\nAnko blows smoke in your face.\n\n*"${riddle.riddle}"*`, components: [{ type: 1, components: options.map(o => ({ type: 2, style: 1, label: o.label, custom_id: `game_riddle_ans_${o.id}` })) }] } }), { headers: { 'Content-Type': 'application/json' } });
         }
 
         if (cid.startsWith('game_riddle_ans_')) {
           const isCorrect = cid.endsWith('correct');
           ctx.waitUntil((async () => {
-            let reaction = "";
-            try {
-              const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST', headers: { 'Authorization': `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  model: 'openai/gpt-oss-20b', 
-                  messages: [{ role: 'system', content: `You are Anko Uguisu. The player just answered a riddle ${isCorrect ? 'correctly' : 'incorrectly'}. Write one short, cynical reaction sentence.` }], 
-                  max_tokens: 50 
-                })
-              });
-              const aiData: any = await aiRes.json();
-              if (aiData.choices && aiData.choices[0].message.content) reaction = aiData.choices[0].message.content;
-            } catch (e) {}
-            if (!reaction) reaction = isCorrect ? "Anko raises an eyebrow. \"Not bad, kid.\"" : "Anko sighs. \"Pathetic.\"";
-
-            if (isCorrect) {
-              await env.DB.prepare(`UPDATE players SET xp = xp + 150 WHERE id = ?`).bind(userId).run();
-              const levelResult = await processLevelUp(env, userId);
-              let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: `🕵️ **Anko's Riddle**\n${reaction}\n\n**(+150 XP)**${extraMsg}`, components: [] })
-              });
-            } else {
-              await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: `🕵️ **Anko's Riddle**\n${reaction}`, components: [] })
-              });
-            }
+            let reaction = isCorrect ? "Anko raises an eyebrow. \"Not bad, kid.\"" : "Anko sighs. \"Pathetic.\"";
+            if (isCorrect) await env.DB.prepare(`UPDATE players SET xp = xp + 150 WHERE id = ?`).bind(userId).run();
+            const levelResult = isCorrect ? await processLevelUp(env, userId) : null;
+            let extraMsg = levelResult ? `\n✨ **Level Up!** You are now Level ${levelResult.level}.` : "";
+            await fetch(`https://discord.com/api/v10/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `🕵️ **Anko's Riddle**\n${reaction}${extraMsg}`, components: [] }) });
           })());
           return new Response(JSON.stringify({ type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE }), { headers: { 'Content-Type': 'application/json' } });
         }
